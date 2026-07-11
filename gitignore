@@ -1,0 +1,37 @@
+# Environnement virtuel Python — jamais sur GitHub (des milliers de fichiers,
+# et des chemins spécifiques à ta machine)
+venv/
+env/
+.venv/
+
+# Cache Python compilé — régénéré automatiquement, inutile à versionner
+__pycache__/
+*.pyc
+*.pyo
+
+# Identifiants et config personnelle — NE JAMAIS PARTAGER (clés eBay, etc.)
+.env
+env
+env.txt
+.env.txt
+ebay.env
+sniper_settings.json
+
+# Données générées par l'app au fil du scan — spécifiques à chaque utilisateur,
+# se recréent automatiquement au premier lancement
+deals_found.json
+deals_archive.jsonl
+seen_ads.json
+price_history.json
+price_observations.jsonl
+live_prices.json
+
+# Fichiers système macOS/Windows
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Éditeurs de code
+.vscode/
+.idea/
+*.swp
