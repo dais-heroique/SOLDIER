@@ -68,6 +68,16 @@ GPU = {
     "GTX 980": {"fair": 70, "good": 58, "steal": 48, "queries": ["GTX 980"]},
     "GTX 970": {"fair": 50, "good": 42, "steal": 34, "queries": ["GTX 970"]},
     "GTX 960": {"fair": 35, "good": 29, "steal": 24, "queries": ["GTX 960"]},
+    "GTX 780 Ti": {"fair": 40, "good": 33, "steal": 27, "queries": ["GTX 780 Ti"]},
+    "GTX 780": {"fair": 30, "good": 25, "steal": 20, "queries": ["GTX 780"]},
+    "GTX 770": {"fair": 25, "good": 21, "steal": 17, "queries": ["GTX 770"]},
+    "GTX 760": {"fair": 20, "good": 17, "steal": 14, "queries": ["GTX 760"]},
+    "GTX 750 Ti": {"fair": 22, "good": 18, "steal": 15, "queries": ["GTX 750 Ti"]},
+    "GTX 750": {"fair": 15, "good": 12, "steal": 10, "queries": ["GTX 750"]},
+    "GTX 680": {"fair": 25, "good": 21, "steal": 17, "queries": ["GTX 680"]},
+    "GTX 670": {"fair": 22, "good": 18, "steal": 15, "queries": ["GTX 670"]},
+    "GTX 660": {"fair": 18, "good": 15, "steal": 12, "queries": ["GTX 660"]},
+    "GTX 650 Ti": {"fair": 15, "good": 12, "steal": 10, "queries": ["GTX 650 Ti"]},
     "RX 9070 XT": {"fair": 680, "good": 564, "steal": 462, "queries": ["RX 9070 XT", "9070XT"]},
     "RX 9070": {"fair": 580, "good": 481, "steal": 394, "queries": ["RX 9070"]},
     "RX 9060 XT": {"fair": 360, "good": 299, "steal": 245, "queries": ["RX 9060 XT"]},
@@ -98,6 +108,13 @@ GPU = {
     "RX 580 4GB": {"fair": 50, "good": 42, "steal": 34, "queries": ["RX 580 4"]},
     "RX 570": {"fair": 50, "good": 42, "steal": 34, "queries": ["RX 570"]},
     "RX 560": {"fair": 35, "good": 29, "steal": 24, "queries": ["RX 560"]},
+    "R9 290": {"fair": 35, "good": 29, "steal": 24, "queries": ["R9 290", "Radeon R9 290"]},
+    "R9 280X": {"fair": 28, "good": 23, "steal": 19, "queries": ["R9 280X", "Radeon R9 280X"]},
+    "R9 270X": {"fair": 20, "good": 17, "steal": 14, "queries": ["R9 270X", "Radeon R9 270X"]},
+    "R7 260X": {"fair": 15, "good": 12, "steal": 10, "queries": ["R7 260X", "Radeon R7 260X"]},
+    "HD 7970": {"fair": 25, "good": 21, "steal": 17, "queries": ["HD 7970", "Radeon HD 7970"]},
+    "HD 7870": {"fair": 18, "good": 15, "steal": 12, "queries": ["HD 7870", "Radeon HD 7870"]},
+    "HD 6870": {"fair": 12, "good": 10, "steal": 8, "queries": ["HD 6870", "Radeon HD 6870"]},
     "Arc B580": {"fair": 280, "good": 232, "steal": 190, "queries": ["Arc B580", "Intel Arc B580"]},
     "Arc A770": {"fair": 220, "good": 183, "steal": 150, "queries": ["Arc A770"]},
     "Arc A750": {"fair": 170, "good": 141, "steal": 116, "queries": ["Arc A750"]},
@@ -114,6 +131,7 @@ CPU = {
     "Ryzen 9 9900X": {"fair": 360, "good": 299, "steal": 245, "queries": ["Ryzen 9 9900X", "9900X"]},
     "Ryzen 7 9700X": {"fair": 280, "good": 232, "steal": 190, "queries": ["Ryzen 7 9700X", "9700X"]},
     "Ryzen 5 9600X": {"fair": 200, "good": 166, "steal": 136, "queries": ["Ryzen 5 9600X", "9600X"]},
+    "Ryzen 5 9600": {"fair": 180, "good": 149, "steal": 122, "queries": ["Ryzen 5 9600", "9600"]},
     "Ryzen 9 7950X3D": {"fair": 420, "good": 349, "steal": 286, "queries": ["7950X3D"]},
     "Ryzen 9 7950X": {"fair": 340, "good": 282, "steal": 231, "queries": ["Ryzen 9 7950X", "7950X"]},
     "Ryzen 9 7900X3D": {"fair": 320, "good": 266, "steal": 218, "queries": ["7900X3D"]},
@@ -124,6 +142,7 @@ CPU = {
     "Ryzen 5 7600X": {"fair": 170, "good": 141, "steal": 116, "queries": ["Ryzen 5 7600X", "7600X"]},
     "Ryzen 5 7600": {"fair": 150, "good": 124, "steal": 102, "queries": ["Ryzen 5 7600"]},
     "Ryzen 5 7500F": {"fair": 130, "good": 108, "steal": 88, "queries": ["Ryzen 5 7500F", "7500F"]},
+    "Ryzen 5 8600G": {"fair": 140, "good": 116, "steal": 95, "queries": ["Ryzen 5 8600G", "8600G"]},
     "Ryzen 9 5950X": {"fair": 280, "good": 232, "steal": 190, "queries": ["Ryzen 9 5950X", "5950X"]},
     "Ryzen 9 5900X": {"fair": 200, "good": 166, "steal": 136, "queries": ["Ryzen 9 5900X", "5900X"]},
     "Ryzen 7 5800X3D": {"fair": 260, "good": 216, "steal": 177, "queries": ["5800X3D"]},
@@ -135,6 +154,8 @@ CPU = {
     "Ryzen 5 5600": {"fair": 90, "good": 75, "steal": 61, "queries": ["Ryzen 5 5600"]},
     "Ryzen 5 5600G": {"fair": 95, "good": 79, "steal": 65, "queries": ["Ryzen 5 5600G", "5600G"]},
     "Ryzen 5 5500": {"fair": 70, "good": 58, "steal": 48, "queries": ["Ryzen 5 5500"]},
+    "Ryzen 5 5700G": {"fair": 100, "good": 83, "steal": 68, "queries": ["Ryzen 5 5700G", "5700G"]},
+    "Ryzen 5 4600G": {"fair": 75, "good": 62, "steal": 51, "queries": ["Ryzen 5 4600G", "4600G"]},
     "Ryzen 9 3900X": {"fair": 130, "good": 108, "steal": 88, "queries": ["Ryzen 9 3900X", "3900X"]},
     "Ryzen 7 3800X": {"fair": 100, "good": 83, "steal": 68, "queries": ["Ryzen 7 3800X", "3800X"]},
     "Ryzen 7 3700X": {"fair": 90, "good": 75, "steal": 61, "queries": ["Ryzen 7 3700X", "3700X"]},
@@ -143,7 +164,9 @@ CPU = {
     "Ryzen 5 3400G": {"fair": 55, "good": 46, "steal": 37, "queries": ["Ryzen 5 3400G", "3400G"]},
     "Ryzen 7 2700X": {"fair": 70, "good": 58, "steal": 48, "queries": ["Ryzen 7 2700X", "2700X"]},
     "Ryzen 5 2600": {"fair": 40, "good": 33, "steal": 27, "queries": ["Ryzen 5 2600"]},
+    "Ryzen 5 2600X": {"fair": 45, "good": 37, "steal": 31, "queries": ["Ryzen 5 2600X", "2600X"]},
     "Ryzen 5 1600": {"fair": 35, "good": 29, "steal": 24, "queries": ["Ryzen 5 1600"]},
+    "Ryzen 5 1600X": {"fair": 38, "good": 32, "steal": 26, "queries": ["Ryzen 5 1600X", "1600X"]},
     "Core Ultra 9 285K": {"fair": 480, "good": 398, "steal": 326, "queries": ["Ultra 9 285K", "285K"]},
     "Core Ultra 7 265K": {"fair": 320, "good": 266, "steal": 218, "queries": ["Ultra 7 265K", "265K"]},
     "Core Ultra 5 245K": {"fair": 230, "good": 191, "steal": 156, "queries": ["Ultra 5 245K", "245K"]},
@@ -181,37 +204,101 @@ CPU = {
     "i7-6700K": {"fair": 50, "good": 42, "steal": 34, "queries": ["i7-6700K", "6700K"]},
     "i5-6600K": {"fair": 35, "good": 29, "steal": 24, "queries": ["i5-6600K", "6600K"]},
     "i5-6500": {"fair": 25, "good": 21, "steal": 17, "queries": ["i5-6500"]},
+    "i7-4790K": {"fair": 40, "good": 33, "steal": 27, "queries": ["i7-4790K", "4790K"]},
+    "i7-4770K": {"fair": 35, "good": 29, "steal": 24, "queries": ["i7-4770K", "4770K"]},
+    "i5-4690K": {"fair": 28, "good": 23, "steal": 19, "queries": ["i5-4690K", "4690K"]},
+    "i5-4460": {"fair": 20, "good": 17, "steal": 14, "queries": ["i5-4460"]},
+    "i7-3770K": {"fair": 30, "good": 25, "steal": 20, "queries": ["i7-3770K", "3770K"]},
+    "i5-3570K": {"fair": 22, "good": 18, "steal": 15, "queries": ["i5-3570K", "3570K"]},
+    "i7-2600K": {"fair": 25, "good": 21, "steal": 17, "queries": ["i7-2600K", "2600K"]},
+    "i5-2500K": {"fair": 18, "good": 15, "steal": 12, "queries": ["i5-2500K", "2500K"]},
+    "i7-860": {"fair": 15, "good": 12, "steal": 10, "queries": ["i7-860"]},
+    "i5-750": {"fair": 12, "good": 10, "steal": 8, "queries": ["i5-750"]},
+    "FX-9590": {"fair": 25, "good": 21, "steal": 17, "queries": ["FX-9590", "FX 9590"]},
+    "FX-8350": {"fair": 20, "good": 17, "steal": 14, "queries": ["FX-8350", "FX 8350"]},
+    "FX-8320": {"fair": 17, "good": 14, "steal": 12, "queries": ["FX-8320", "FX 8320"]},
+    "FX-6300": {"fair": 12, "good": 10, "steal": 8, "queries": ["FX-6300", "FX 6300"]},
+    "Phenom II X6 1090T": {"fair": 15, "good": 12, "steal": 10, "queries": ["Phenom II X6 1090T", "Phenom 1090T"]},
+    "Phenom II X4 965": {"fair": 12, "good": 10, "steal": 8, "queries": ["Phenom II X4 965", "Phenom 965"]},
+    "A10-7850K": {"fair": 15, "good": 12, "steal": 10, "queries": ["A10-7850K", "A10 7850K"]},
 }
 
 # ────────────────────────────────────────────────────────────
 # 🔌 Cartes mères
 # ────────────────────────────────────────────────────────────
 MOBO = {
+    # ── AM5 (Ryzen 7000/8000/9000) ──
     "X870E (AM5)": {"fair": 320, "good": 266, "steal": 218, "queries": ["carte mère X870E", "X870E"]},
+    "X870 (AM5)": {"fair": 260, "good": 216, "steal": 177, "queries": ["carte mère X870", "X870"]},
     "X670E (AM5)": {"fair": 200, "good": 166, "steal": 136, "queries": ["carte mère X670E", "X670E"]},
     "X670 (AM5)": {"fair": 170, "good": 141, "steal": 116, "queries": ["carte mère X670", "X670"]},
     "B650E (AM5)": {"fair": 150, "good": 124, "steal": 102, "queries": ["carte mère B650E", "B650E"]},
-    "B650 (AM5)": {"fair": 120, "good": 100, "steal": 82, "queries": ["carte mère B650", "B650"]},
-    "A620 (AM5)": {"fair": 80, "good": 66, "steal": 54, "queries": ["carte mère A620", "A620"]},
+    "B650 (AM5)": {"fair": 120, "good": 100, "steal": 82, "queries": ["carte mère B650", "B650", "B650M", "carte mère B650M"]},
+    "A620 (AM5)": {"fair": 80, "good": 66, "steal": 54, "queries": ["carte mère A620", "A620", "A620M", "carte mère A620M"]},
+    # ── AM4 (Ryzen 1000-5000) ──
     "X570 (AM4)": {"fair": 110, "good": 91, "steal": 75, "queries": ["carte mère X570", "X570"]},
-    "B550 (AM4)": {"fair": 80, "good": 66, "steal": 54, "queries": ["carte mère B550", "B550"]},
-    "B450 (AM4)": {"fair": 50, "good": 42, "steal": 34, "queries": ["carte mère B450", "B450"]},
+    "B550 (AM4)": {"fair": 80, "good": 66, "steal": 54, "queries": ["carte mère B550", "B550", "B550M", "carte mère B550M"]},
+    "B450 (AM4)": {"fair": 50, "good": 42, "steal": 34, "queries": ["carte mère B450", "B450", "B450M", "carte mère B450M"]},
     "X470 (AM4)": {"fair": 60, "good": 50, "steal": 41, "queries": ["carte mère X470", "X470"]},
-    "B350 (AM4)": {"fair": 38, "good": 32, "steal": 26, "queries": ["carte mère B350", "B350"]},
-    "A320 (AM4)": {"fair": 28, "good": 23, "steal": 19, "queries": ["carte mère A320", "A320"]},
+    "B350 (AM4)": {"fair": 38, "good": 32, "steal": 26, "queries": ["carte mère B350", "B350", "B350M", "carte mère B350M"]},
+    "A320 (AM4)": {"fair": 28, "good": 23, "steal": 19, "queries": ["carte mère A320", "A320", "A320M", "carte mère A320M"]},
+    "A520 (AM4)": {"fair": 32, "good": 27, "steal": 22, "queries": ["carte mère A520", "A520", "A520M", "carte mère A520M"]},
+    "X370 (AM4)": {"fair": 45, "good": 37, "steal": 31, "queries": ["carte mère X370", "X370"]},
+    # ── Intel LGA1851 (Core Ultra 200S) ──
     "Z890 (1851)": {"fair": 260, "good": 216, "steal": 177, "queries": ["carte mère Z890", "Z890"]},
-    "B860 (1851)": {"fair": 150, "good": 124, "steal": 102, "queries": ["carte mère B860", "B860"]},
+    "B860 (1851)": {"fair": 150, "good": 124, "steal": 102, "queries": ["carte mère B860", "B860", "B860M", "carte mère B860M"]},
+    "H810 (1851)": {"fair": 90, "good": 75, "steal": 61, "queries": ["carte mère H810", "H810"]},
+    # ── Intel LGA1700 (12e-14e gen) ──
     "Z790 (1700)": {"fair": 160, "good": 133, "steal": 109, "queries": ["carte mère Z790", "Z790"]},
-    "B760 (1700)": {"fair": 100, "good": 83, "steal": 68, "queries": ["carte mère B760", "B760"]},
-    "B660 (1700)": {"fair": 75, "good": 62, "steal": 51, "queries": ["carte mère B660", "B660"]},
-    "H610 (1700)": {"fair": 55, "good": 46, "steal": 37, "queries": ["carte mère H610", "H610"]},
+    "B760 (1700)": {"fair": 100, "good": 83, "steal": 68, "queries": ["carte mère B760", "B760", "B760M", "carte mère B760M"]},
+    "H770 (1700)": {"fair": 85, "good": 71, "steal": 58, "queries": ["carte mère H770", "H770"]},
+    "B660 (1700)": {"fair": 75, "good": 62, "steal": 51, "queries": ["carte mère B660", "B660", "B660M", "carte mère B660M"]},
+    "H670 (1700)": {"fair": 70, "good": 58, "steal": 48, "queries": ["carte mère H670", "H670"]},
+    "H610 (1700)": {"fair": 55, "good": 46, "steal": 37, "queries": ["carte mère H610", "H610", "H610M", "carte mère H610M"]},
     "Z690 (1700)": {"fair": 120, "good": 100, "steal": 82, "queries": ["carte mère Z690", "Z690"]},
+    # ── Intel LGA1200 (10e-11e gen) ──
     "Z590 (1200)": {"fair": 80, "good": 66, "steal": 54, "queries": ["carte mère Z590", "Z590"]},
-    "B560 (1200)": {"fair": 55, "good": 46, "steal": 37, "queries": ["carte mère B560", "B560"]},
+    "B560 (1200)": {"fair": 55, "good": 46, "steal": 37, "queries": ["carte mère B560", "B560", "B560M", "carte mère B560M"]},
+    "H570 (1200)": {"fair": 45, "good": 37, "steal": 31, "queries": ["carte mère H570", "H570"]},
+    "H510 (1200)": {"fair": 30, "good": 25, "steal": 20, "queries": ["carte mère H510", "H510", "H510M", "carte mère H510M"]},
     "Z490 (1200)": {"fair": 70, "good": 58, "steal": 48, "queries": ["carte mère Z490", "Z490"]},
+    "B460 (1200)": {"fair": 40, "good": 33, "steal": 27, "queries": ["carte mère B460", "B460", "B460M", "carte mère B460M"]},
+    "H410 (1200)": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte mère H410", "H410", "H410M", "carte mère H410M"]},
+    # ── Intel LGA1151 (6e-9e gen) ──
     "Z390 (1151)": {"fair": 55, "good": 46, "steal": 37, "queries": ["carte mère Z390", "Z390"]},
-    "B360 (1151)": {"fair": 35, "good": 29, "steal": 24, "queries": ["carte mère B360", "B360"]},
+    "B365 (1151)": {"fair": 32, "good": 27, "steal": 22, "queries": ["carte mère B365", "B365"]},
+    "B360 (1151)": {"fair": 35, "good": 29, "steal": 24, "queries": ["carte mère B360", "B360", "B360M", "carte mère B360M"]},
+    "H370 (1151)": {"fair": 30, "good": 25, "steal": 20, "queries": ["carte mère H370", "H370"]},
+    "Q370 (1151)": {"fair": 35, "good": 29, "steal": 24, "queries": ["carte mère Q370", "Q370"]},
+    "H310 (1151)": {"fair": 18, "good": 15, "steal": 12, "queries": ["carte mère H310", "H310", "H310M", "carte mère H310M"]},
     "Z370 (1151)": {"fair": 45, "good": 37, "steal": 31, "queries": ["carte mère Z370", "Z370"]},
+    "B250 (1151)": {"fair": 22, "good": 18, "steal": 15, "queries": ["carte mère B250", "B250"]},
+    "H270 (1151)": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte mère H270", "H270"]},
+    "Z270 (1151)": {"fair": 35, "good": 29, "steal": 24, "queries": ["carte mère Z270", "Z270"]},
+    "H110 (1151)": {"fair": 15, "good": 12, "steal": 10, "queries": ["carte mère H110", "H110", "H110M", "carte mère H110M"]},
+    # ── Intel LGA1150 (4e-5e gen Haswell) ──
+    "Z97 (1150)": {"fair": 40, "good": 33, "steal": 27, "queries": ["carte mère Z97", "Z97"]},
+    "H97 (1150)": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte mère H97", "H97"]},
+    "B85 (1150)": {"fair": 20, "good": 17, "steal": 14, "queries": ["carte mère B85", "B85"]},
+    "H81 (1150)": {"fair": 14, "good": 12, "steal": 9, "queries": ["carte mère H81", "H81"]},
+    "Z87 (1150)": {"fair": 28, "good": 23, "steal": 19, "queries": ["carte mère Z87", "Z87"]},
+    "H87 (1150)": {"fair": 18, "good": 15, "steal": 12, "queries": ["carte mère H87", "H87"]},
+    # ── Intel LGA1155 (2e-3e gen Sandy/Ivy Bridge) ──
+    "Z77 (1155)": {"fair": 30, "good": 25, "steal": 20, "queries": ["carte mère Z77", "Z77"]},
+    "B75 (1155)": {"fair": 18, "good": 15, "steal": 12, "queries": ["carte mère B75", "B75"]},
+    "H77 (1155)": {"fair": 20, "good": 17, "steal": 14, "queries": ["carte mère H77", "H77"]},
+    "Z68 (1155)": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte mère Z68", "Z68"]},
+    "H61 (1155)": {"fair": 15, "good": 12, "steal": 10, "queries": ["carte mère H61", "H61"]},
+    "P67 (1155)": {"fair": 22, "good": 18, "steal": 15, "queries": ["carte mère P67", "P67"]},
+    # ── AMD AM3/AM3+ (FX/Phenom) ──
+    "990FX (AM3+)": {"fair": 30, "good": 25, "steal": 20, "queries": ["carte mère 990FX", "990FX"]},
+    "970 (AM3+)": {"fair": 20, "good": 17, "steal": 14, "queries": ["carte mère 970 AM3", "chipset 970 AM3+"]},
+    "990X (AM3+)": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte mère 990X", "990X AM3+"]},
+    "760G (AM3)": {"fair": 12, "good": 10, "steal": 8, "queries": ["carte mère 760G", "760G AM3"]},
+    # ── AMD FM2/FM2+ (APU A-series) ──
+    "FM2+ A88X": {"fair": 20, "good": 17, "steal": 14, "queries": ["carte mère A88X", "FM2+ A88X"]},
+    "FM2+ A78": {"fair": 15, "good": 12, "steal": 10, "queries": ["carte mère A78 FM2+", "FM2+ A78"]},
+    "FM2 A85X": {"fair": 16, "good": 13, "steal": 11, "queries": ["carte mère A85X", "FM2 A85X"]},
 }
 
 # ────────────────────────────────────────────────────────────
@@ -228,6 +315,8 @@ RAM = {
     "DDR4 8GB": {"fair": 20, "good": 17, "steal": 14, "queries": ["DDR4 8GB", "DDR4 8 go"]},
     "DDR3 16GB (2x8)": {"fair": 30, "good": 25, "steal": 20, "queries": ["DDR3 16", "DDR3 2x8"]},
     "DDR3 8GB": {"fair": 15, "good": 12, "steal": 10, "queries": ["DDR3 8GB", "DDR3 8 go"]},
+    "DDR2 4GB": {"fair": 10, "good": 8, "steal": 7, "queries": ["DDR2 4GB", "DDR2 4 go"]},
+    "DDR2 2GB": {"fair": 6, "good": 5, "steal": 4, "queries": ["DDR2 2GB", "DDR2 2 go"]},
 }
 
 # ────────────────────────────────────────────────────────────
@@ -253,23 +342,30 @@ STORAGE = {
 # ⚡ Alimentations
 # ────────────────────────────────────────────────────────────
 PSU = {
-    "PSU 1200W": {"fair": 140, "good": 116, "steal": 95, "watts": 1200, "queries": ["alimentation 1200W"]},
-    "PSU 1000W": {"fair": 110, "good": 91, "steal": 75, "watts": 1000, "queries": ["alimentation 1000W"]},
-    "PSU 850W": {"fair": 85, "good": 71, "steal": 58, "watts": 850, "queries": ["alimentation 850W"]},
-    "PSU 750W": {"fair": 65, "good": 54, "steal": 44, "watts": 750, "queries": ["alimentation 750W"]},
-    "PSU 650W": {"fair": 50, "good": 42, "steal": 34, "watts": 650, "queries": ["alimentation 650W"]},
-    "PSU 550W": {"fair": 38, "good": 32, "steal": 26, "watts": 550, "queries": ["alimentation 550W"]},
+    # Nom de modèle "Alimentation XXXXW" (pas "PSU XXXXW"): le mot "alimentation"
+    # doit rester un token requis à l'identification, sinon seule la puissance
+    # ("1200w") suffit à matcher — n'importe quel appareil électroménager de
+    # même puissance (fer à repasser, grill...) matchait auparavant.
+    "Alimentation 1200W": {"fair": 140, "good": 116, "steal": 95, "watts": 1200, "queries": ["alimentation 1200W"]},
+    "Alimentation 1000W": {"fair": 110, "good": 91, "steal": 75, "watts": 1000, "queries": ["alimentation 1000W"]},
+    "Alimentation 850W": {"fair": 85, "good": 71, "steal": 58, "watts": 850, "queries": ["alimentation 850W"]},
+    "Alimentation 750W": {"fair": 65, "good": 54, "steal": 44, "watts": 750, "queries": ["alimentation 750W"]},
+    "Alimentation 650W": {"fair": 50, "good": 42, "steal": 34, "watts": 650, "queries": ["alimentation 650W"]},
+    "Alimentation 550W": {"fair": 38, "good": 32, "steal": 26, "watts": 550, "queries": ["alimentation 550W"]},
 }
 
 # ────────────────────────────────────────────────────────────
 # ❄️ Refroidissement
 # ────────────────────────────────────────────────────────────
 COOLING = {
-    "AIO 420mm": {"fair": 130, "good": 108, "steal": 88, "queries": ["watercooling AIO 420", "AIO 420"]},
-    "AIO 360mm": {"fair": 90, "good": 75, "steal": 61, "queries": ["watercooling AIO 360", "AIO 360mm"]},
-    "AIO 280mm": {"fair": 75, "good": 62, "steal": 51, "queries": ["watercooling AIO 280", "AIO 280mm"]},
-    "AIO 240mm": {"fair": 60, "good": 50, "steal": 41, "queries": ["watercooling AIO 240", "AIO 240mm"]},
-    "AIO 120mm": {"fair": 35, "good": 29, "steal": 24, "queries": ["watercooling AIO 120", "AIO 120mm"]},
+    # Prix révisés à la baisse (retour terrain: le marché de l'occasion pour
+    # un AIO 420mm tourne réellement autour de 70€, pas 130€ — l'ancien tarif
+    # était calé sur du neuf/quasi-neuf, pas sur l'occasion réelle).
+    "AIO 420mm": {"fair": 70, "good": 58, "steal": 48, "queries": ["watercooling AIO 420", "AIO 420"]},
+    "AIO 360mm": {"fair": 49, "good": 41, "steal": 33, "queries": ["watercooling AIO 360", "AIO 360mm"]},
+    "AIO 280mm": {"fair": 41, "good": 34, "steal": 28, "queries": ["watercooling AIO 280", "AIO 280mm"]},
+    "AIO 240mm": {"fair": 33, "good": 27, "steal": 22, "queries": ["watercooling AIO 240", "AIO 240mm"]},
+    "AIO 120mm": {"fair": 19, "good": 16, "steal": 13, "queries": ["watercooling AIO 120", "AIO 120mm"]},
     "Noctua NH-D15": {"fair": 70, "good": 58, "steal": 48, "queries": ["Noctua NH-D15", "NH-D15"]},
     "Noctua NH-U12": {"fair": 45, "good": 37, "steal": 31, "queries": ["Noctua NH-U12", "NH-U12"]},
     "be quiet Dark Rock": {"fair": 50, "good": 42, "steal": 34, "queries": ["Dark Rock Pro", "be quiet Dark Rock"]},
@@ -369,38 +465,62 @@ CASE = {
 }
 
 # ────────────────────────────────────────────────────────────
-# 💻 PC portables
+# 📡 Cartes réseau / WiFi
 # ────────────────────────────────────────────────────────────
-LAPTOP = {
-    "PC portable gaming RTX 4070+": {"fair": 950, "good": 788, "steal": 646, "queries": ["PC portable gaming RTX 4070", "laptop RTX 4080"]},
-    "PC portable gaming RTX 4060": {"fair": 750, "good": 622, "steal": 510, "queries": ["PC portable gaming RTX 4060", "laptop RTX 4060"]},
-    "PC portable gaming RTX 3060": {"fair": 550, "good": 456, "steal": 374, "queries": ["PC portable gaming RTX 3060", "laptop RTX 3060"]},
-    "PC portable gaming RTX 3050": {"fair": 450, "good": 374, "steal": 306, "queries": ["PC portable gaming RTX 3050"]},
-    "MacBook Air M2/M3": {"fair": 700, "good": 581, "steal": 476, "queries": ["MacBook Air M2", "MacBook Air M3"]},
-    "MacBook Pro M-series": {"fair": 1100, "good": 913, "steal": 748, "queries": ["MacBook Pro M1 Pro", "MacBook Pro M3"]},
+NETWORK = {
+    "Carte WiFi 6E PCIe": {"fair": 35, "good": 29, "steal": 24, "queries": ["carte wifi 6E PCIe", "carte wifi 6E interne"]},
+    "Carte WiFi6 PCIe": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte wifi 6 PCIe", "carte wifi ax PCIe"]},
+    "Carte WiFi PCIe ancienne (AC/N)": {"fair": 12, "good": 10, "steal": 8, "queries": ["carte wifi PCIe interne", "carte wifi ac PCIe"]},
+    "Clé USB WiFi": {"fair": 10, "good": 8, "steal": 7, "queries": ["clé usb wifi", "adaptateur usb wifi"]},
+    "Carte réseau 2.5G/10G Ethernet": {"fair": 20, "good": 17, "steal": 14, "queries": ["carte réseau 2.5G", "carte réseau 10G ethernet"]},
+    "Carte réseau Gigabit PCIe": {"fair": 10, "good": 8, "steal": 7, "queries": ["carte réseau gigabit PCIe", "carte ethernet PCIe"]},
 }
 
 # ────────────────────────────────────────────────────────────
-# 🪑 Sièges gaming
+# 🔊 Cartes son
 # ────────────────────────────────────────────────────────────
-CHAIR = {
-    "Siège Secretlab": {"fair": 250, "good": 208, "steal": 170, "queries": ["Secretlab Titan", "chaise Secretlab"]},
-    "Siège Noblechairs": {"fair": 180, "good": 149, "steal": 122, "queries": ["Noblechairs", "chaise Noblechairs"]},
-    "Siège gaming générique": {"fair": 70, "good": 58, "steal": 48, "queries": ["chaise gaming", "siège gamer"]},
+SOUND = {
+    "Sound Blaster AE-9/AE-7": {"fair": 90, "good": 75, "steal": 61, "queries": ["Sound Blaster AE-9", "Sound Blaster AE-7"]},
+    "Sound Blaster AE-5": {"fair": 55, "good": 46, "steal": 37, "queries": ["Sound Blaster AE-5"]},
+    "Sound Blaster Z/ZxR": {"fair": 45, "good": 37, "steal": 31, "queries": ["Sound Blaster Z", "Sound Blaster ZxR"]},
+    "Sound Blaster ancienne (Audigy/X-Fi)": {"fair": 20, "good": 17, "steal": 14, "queries": ["Sound Blaster Audigy", "Sound Blaster X-Fi"]},
+    "Carte son externe USB": {"fair": 25, "good": 21, "steal": 17, "queries": ["carte son externe USB", "DAC audio USB"]},
+}
+
+# ────────────────────────────────────────────────────────────
+# 💽 Lecteurs optiques
+# ────────────────────────────────────────────────────────────
+OPTICAL = {
+    "Graveur Blu-ray interne": {"fair": 30, "good": 25, "steal": 20, "queries": ["graveur blu-ray interne", "lecteur blu-ray PC"]},
+    "Graveur Blu-ray externe USB": {"fair": 35, "good": 29, "steal": 24, "queries": ["graveur blu-ray externe USB"]},
+    "Graveur DVD interne": {"fair": 10, "good": 8, "steal": 7, "queries": ["graveur DVD interne", "lecteur DVD PC"]},
+    "Graveur DVD externe USB": {"fair": 15, "good": 12, "steal": 10, "queries": ["graveur DVD externe USB"]},
+}
+
+# ────────────────────────────────────────────────────────────
+# 🔋 Onduleurs (UPS)
+# ────────────────────────────────────────────────────────────
+UPS = {
+    "Onduleur APC 1000-1500VA": {"fair": 80, "good": 66, "steal": 54, "queries": ["onduleur APC 1000VA", "onduleur APC 1500VA", "APC Back-UPS"]},
+    "Onduleur APC 600-850VA": {"fair": 45, "good": 37, "steal": 31, "queries": ["onduleur APC 650VA", "onduleur APC 850VA"]},
+    "Onduleur Eaton": {"fair": 70, "good": 58, "steal": 48, "queries": ["onduleur Eaton", "Eaton UPS"]},
+    "Onduleur générique": {"fair": 35, "good": 29, "steal": 24, "queries": ["onduleur PC", "UPS onduleur"]},
 }
 
 # Regroupement par catégorie (ordre = ordre d'affichage)
 CATEGORIES = {
-    "GPU": {"label": "🎮 Cartes graphiques", "color": "#ff6b35", "db": GPU},
-    "CPU": {"label": "🧠 Processeurs", "color": "#a8dadc", "db": CPU},
-    "MOBO": {"label": "🔌 Cartes mères", "color": "#c77dff", "db": MOBO},
-    "RAM": {"label": "💾 Mémoire RAM", "color": "#ffd166", "db": RAM},
-    "STORAGE": {"label": "💿 Stockage", "color": "#06d6a0", "db": STORAGE},
-    "PSU": {"label": "⚡ Alimentations", "color": "#118ab2", "db": PSU},
-    "COOLING": {"label": "❄️ Refroidissement", "color": "#00d4ff", "db": COOLING},
-    "CASE": {"label": "🖥️ Boîtiers", "color": "#ef476f", "db": CASE},
-    "LAPTOP": {"label": "💻 PC portables", "color": "#4361ee", "db": LAPTOP},
-    "CHAIR": {"label": "🪑 Sièges gaming", "color": "#4cc9f0", "db": CHAIR},
+    "GPU": {"label": "Cartes graphiques", "color": "#ff6b35", "db": GPU},
+    "CPU": {"label": "Processeurs", "color": "#a8dadc", "db": CPU},
+    "MOBO": {"label": "Cartes mères", "color": "#c77dff", "db": MOBO},
+    "RAM": {"label": "Mémoire RAM", "color": "#ffd166", "db": RAM},
+    "STORAGE": {"label": "Stockage", "color": "#06d6a0", "db": STORAGE},
+    "PSU": {"label": "Alimentations", "color": "#118ab2", "db": PSU},
+    "COOLING": {"label": "Refroidissement", "color": "#00d4ff", "db": COOLING},
+    "CASE": {"label": "Boîtiers", "color": "#ef476f", "db": CASE},
+    "NETWORK": {"label": "Réseau/WiFi", "color": "#f4a261", "db": NETWORK},
+    "SOUND": {"label": "Cartes son", "color": "#e76f51", "db": SOUND},
+    "OPTICAL": {"label": "Lecteurs optiques", "color": "#2a9d8f", "db": OPTICAL},
+    "UPS": {"label": "Onduleurs", "color": "#8ac926", "db": UPS},
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -419,7 +539,9 @@ MIN_PRICE = {
     "PSU": 10,
     "COOLING": 5,
     "CASE": 5,
-    "LAPTOP": 50,
-    "CHAIR": 15,
+    "NETWORK": 5,
+    "SOUND": 10,
+    "OPTICAL": 5,
+    "UPS": 15,
 }
 

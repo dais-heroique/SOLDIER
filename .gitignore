@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.rtf
 env
 env.txt
 .env.txt
@@ -16,6 +17,8 @@ seen_ads.json
 price_history.json
 price_observations.jsonl
 live_prices.json
+soldier.db
+backups/
 .DS_Store
 Thumbs.db
 desktop.ini
