@@ -246,6 +246,68 @@ def _():
         assert m == marque, f"{pn} attribué à {m} au lieu de {marque}"
 
 
+@test("annonce sans fréquence : identifiée quand même, au prix plancher")
+def _():
+    # La majorité des titres Vinted n'annoncent aucune fréquence. Exiger un
+    # MHz revenait à rejeter tout le gisement.
+    r = analyse("Barrette RAM DDR4 16Go")
+    assert r["exclusion"] is None, f"rejetée : {r['rejet_motif']}"
+    assert r["ref_approchee"], "aucune référence approchante trouvée"
+    assert any("fréquence non annoncée" in d for d in r["drapeaux"])
+
+
+@test("estimation sans fréquence : prudente, jamais optimiste")
+def _():
+    sans = analyse("RAM DDR4 16Go Corsair")
+    avec = analyse("RAM DDR4 16Go 3600 Corsair")
+    p_sans = sans["ref_approchee"]["prix_ref_occasion_eur"] / sans["ref_approchee"]["nb_modules"]
+    p_avec = avec["ref_approchee"]["prix_ref_occasion_eur"] / avec["ref_approchee"]["nb_modules"]
+    assert p_sans <= p_avec, \
+        "sans fréquence, l'estimation doit retomber sur la référence la moins chère"
+
+
+@test("marque + gamme sans le mot RAM ni DDR4 : reconnue")
+def _():
+    r = analyse("Corsair Vengeance LPX 16Go", "sortie de mon pc")
+    assert r["pertinent"], "une marque et une gamme mémoire connues suffisent"
+    assert r["generation_incertaine"]
+    assert any("génération non précisée" in d for d in r["drapeaux"])
+    assert r["confiance_texte"] <= 0.30, "génération non confirmée = confiance basse"
+
+
+@test("le part number prime sur la capacité du titre")
+def _():
+    # « 32Go » + PN d'un kit 2×16 : lire 1×32 diviserait la valeur par deux et
+    # ferait rejeter l'affaire à tort.
+    r = analyse("RAM DDR4 32Go 3600 CL16", "F4-3600C16D-32GTZN")
+    assert (r["nb_modules"], r["capacite_module_go"]) == (2, 16), \
+        f"lu {r['nb_modules']}×{r['capacite_module_go']} au lieu de 2×16"
+
+
+@test("une barrette vendue seule n'est pas valorisée comme un kit")
+def _():
+    r = analyse("RAM 16Go Corsair", "CMK32GX4M2E3200C16 une seule barrette du kit")
+    assert (r["nb_modules"], r["capacite_module_go"]) == (1, 16), \
+        f"lu {r['nb_modules']}×{r['capacite_module_go']} : le kit entier serait valorisé"
+    assert not r["est_kit"]
+
+
+@test("capacité au-delà du part number : on s'aligne sur le PN")
+def _():
+    r = analyse("RAM DDR4 64Go", "CMK32GX4M2E3200C16")
+    assert r["capacite_totale_go"] == 32, "surestimer la capacité = payer trop cher"
+    assert any("incohérente" in d for d in r["drapeaux"])
+
+
+@test("prix plancher disponible pour chaque capacité du périmètre")
+def _():
+    for capacite in (8, 16, 32):
+        plancher = ram_db.prix_plancher(capacite)
+        assert plancher and plancher > 0, f"pas de plancher pour {capacite} Go"
+    assert ram_db.prix_plancher(8) < ram_db.prix_plancher(32), \
+        "le plancher doit croître avec la capacité"
+
+
 @test("marque no-name signalée")
 def _():
     r = analyse("Barrette DDR4 16Go 3200 Qiyida")

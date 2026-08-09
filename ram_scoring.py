@@ -33,6 +33,33 @@ def clamp(v, lo=0.0, hi=100.0):
     return max(lo, min(hi, v))
 
 
+def _reference_plancher(analyse):
+    """Référence synthétique construite sur le prix plancher d'une capacité.
+
+    Sert quand rien ne colle dans la base : une annonce « Barrette RAM 16Go »
+    sans marque ni fréquence reste évaluable, à la valeur la plus basse
+    crédible. Volontairement pessimiste — on ne veut alerter que sur ce qui est
+    manifestement bradé, pas sur une estimation optimiste inventée.
+    """
+    import ram_db
+    capacite = analyse.get("capacite_module_go")
+    if not capacite:
+        return None
+    plancher = ram_db.prix_plancher(capacite, 1)
+    if not plancher:
+        return None
+    return {
+        "id": None, "part_number": None, "marque": analyse.get("marque_detectee"),
+        "gamme": "estimation plancher", "capacite_module_go": capacite,
+        "nb_modules": 1, "capacite_totale_go": capacite,
+        "frequence_mhz": analyse.get("frequence_mhz"),
+        "cas_latency": analyse.get("cas_latency"), "rank": None, "die_type": None,
+        "rgb": 0, "couleur": None, "low_profile": 0, "tier": "C",
+        "prix_ref_occasion_eur": plancher, "liquidite": 3,
+        "delai_rotation_jours": 20, "synthetique": True,
+    }
+
+
 # ─────────────────────── FRAIS D'ACQUISITION ───────────────────────
 def frais_acquisition(source, prix_affiche, port_connu=None, main_propre=False, cfg=None):
     """(frais_port, frais_protection, prix_total).
@@ -284,8 +311,13 @@ def pre_score(annonce, analyse, cfg=None):
 
     ref = analyse.get("ref") or analyse.get("ref_approchee")
     if not ref:
+        # Dernier filet : une capacité connue suffit à poser une valeur
+        # plancher. Sans elle, l'annonce n'est vraiment pas exploitable.
+        ref = _reference_plancher(analyse)
+    if not ref:
         resultat["exclusion"] = "non_identifie"
-        resultat["rejet_motif"] = "aucune référence correspondante (ni PN ni specs)"
+        resultat["rejet_motif"] = ("capacité illisible dans l'annonce : "
+                                   "aucune valeur de revente estimable")
         return resultat
 
     # Cas particulier : le lot de 4 Go n'a de sens qu'à très bas prix unitaire.

@@ -449,6 +449,14 @@ def main():
         print(json.dumps(etat(cfg), indent=2, ensure_ascii=False, default=str))
         return
 
+    if "--diag" in args:
+        limite = 500
+        for a in args:
+            if a.startswith("--limite="):
+                limite = int(a.split("=", 1)[1])
+        ram_scrapers.diagnostic(limite, cfg)
+        return
+
     if "--replay" in args:
         limite = 500
         for a in args:

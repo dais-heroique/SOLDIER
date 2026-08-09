@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 62 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 69 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -184,6 +184,7 @@ venv/bin/python3 app.py      # puis http://localhost:8000/ram
 | `ram_sniper.py` | tout : scraping + notifications + vision + calibrage |
 | `ram_sniper.py --dry-run` | idem, sans envoyer une seule notification |
 | `ram_sniper.py --once` | un seul tour de scan puis sortie |
+| `ram_sniper.py --diag` | **pourquoi rien n'est notifié** : motifs de rejet + exemples |
 | `ram_sniper.py --replay` | rejoue les annonces archivées à travers le scoring courant |
 | `ram_sniper.py --calibrer` | lance le job de calibrage immédiatement |
 | `ram_sniper.py --etat` | état complet du système, en JSON |
@@ -425,7 +426,7 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      62 tests, aucun accès réseau
+test_ram_sniper.py      69 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -520,6 +521,12 @@ Si le cookie échoue : `pip install -U curl_cffi`.
 **Leboncoin indisponible**
 `pip install lbc`. Le module fonctionne parfaitement sans — Vinted reste la
 priorité 1.
+
+**Aucune notification**
+Lancez `ram_sniper.py --diag` : il montre à quelle étape ça bloque, avec des
+exemples d'annonces. Un gros paquet de rejets `marge` est SAIN — ça veut dire
+que les annonces sont bien identifiées mais pas rentables. Si le meilleur score
+plafonne sous 65, baissez `scoring.seuil_notification`.
 
 **Trop de notifications**
 Montez `scoring.seuil_notification` à 70-75, ou `scoring.marge_min_eur`.

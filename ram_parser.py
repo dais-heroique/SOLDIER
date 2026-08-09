@@ -160,6 +160,13 @@ RE_KIT_INVERSE = re.compile(r"(?<![a-z0-9])(4|8|16|32)\s*(?:go|gb)\s*[x*]\s*(\d{
 # Quantité annoncée en toutes lettres : "lot de 12", "12 barrettes"
 RE_QUANTITE = re.compile(r"\b(?:lot de|ensemble de|paquet de)\s*(\d{1,2})\b|"
                          r"\b(\d{1,2})\s*barrettes\b", re.I)
+# Vente à l'unité, souvent d'une barrette issue d'un kit. Formulation fréquente
+# sur Vinted et c'est précisément le gisement du radar d'appariement — la
+# confondre avec un kit ferait doubler la valeur estimée.
+RE_UNITAIRE = re.compile(
+    r"\b(?:une?\s+seule?\s+barrette|1\s*seule?\s+barrette|barrette\s+seule|"
+    r"une?\s+barrette\s+(?:du|de\s+la|sur)\b|a\s+l\s*unite|vendue?\s+seule|"
+    r"1\s*barrette|une\s+seule)\b", re.I)
 RE_CAPACITE = re.compile(r"(?<![a-z0-9])(4|8|16|32|64|128)\s*(?:go|gb|g\b)", re.I)
 RE_FREQUENCE = re.compile(r"(?<![a-z0-9])(1333|1600|1866|2133|2400|2666|2800|2933|3000|3066|"
                           r"3200|3333|3466|3600|3733|3800|4000|4133|4266|4400|4600|4800)"
@@ -262,11 +269,21 @@ def extraire_specs(texte, texte_norm):
             specs["nb_modules"] = qte
             specs["est_kit"] = True
 
-    # "kit", "paire", "duo" → c'est un kit même sans quantité explicite
-    if not specs["est_kit"] and re.search(r"\b(kit|paire|duo)\b", texte_norm):
+    # "kit", "paire", "duo" → c'est un kit même sans quantité explicite.
+    # Sauf mention contraire : « une seule barrette du kit » parle bien d'un
+    # kit, mais n'en vend qu'une barrette.
+    vente_unitaire = bool(RE_UNITAIRE.search(texte_norm))
+    if vente_unitaire:
+        specs["nb_modules"] = 1
+        specs["est_kit"] = False
+        specs["vente_unitaire"] = True
+    elif not specs["est_kit"] and re.search(r"\b(kit|paire|duo)\b", texte_norm):
         specs["est_kit"] = True
         if specs["nb_modules"] in (None, 1):
             specs["nb_modules"] = 2
+            # Déduit du mot « kit », pas annoncé : ne pas le reprocher au
+            # vendeur sous forme d'alerte de cohérence.
+            specs["nb_modules_infere"] = True
 
     if specs["capacite_module_go"] and specs["nb_modules"]:
         specs["capacite_totale_go"] = specs["capacite_module_go"] * specs["nb_modules"]
@@ -287,6 +304,63 @@ def extraire_specs(texte, texte_norm):
     if m_rank:
         specs["rank"] = f"{m_rank.group(1)}Rx{m_rank.group(2)}"
     return specs
+
+
+def _accorder_specs_au_pn(specs, ref):
+    """Aligne la configuration lue dans le texte sur celle du part number.
+
+    Trois cas :
+      • le texte annonce la capacité totale de la référence → c'est le kit
+        complet, on adopte sa configuration (2×16 et non 1×32) ;
+      • le texte annonce une fraction de cette capacité → le vendeur ne vend
+        qu'une partie du kit, on garde la capacité par barrette de la référence
+        et on recalcule le nombre de barrettes ;
+      • le texte ne dit rien → on adopte la référence.
+    """
+    out = dict(specs)
+    ref_module = ref["capacite_module_go"]
+    ref_total = ref["capacite_totale_go"]
+    texte_total = specs.get("capacite_totale_go")
+
+    # Vente explicitement à l'unité : le PN donne la capacité par barrette, pas
+    # le nombre de barrettes vendues.
+    if specs.get("vente_unitaire"):
+        out["capacite_module_go"] = ref_module
+        out["nb_modules"] = 1
+        out["capacite_totale_go"] = ref_module
+        out["est_kit"] = False
+        if not out.get("frequence_mhz"):
+            out["frequence_mhz"] = ref["frequence_mhz"]
+        if not out.get("cas_latency"):
+            out["cas_latency"] = ref["cas_latency"]
+        return out
+
+    if texte_total and texte_total < ref_total and texte_total % ref_module == 0:
+        out["capacite_module_go"] = ref_module
+        out["nb_modules"] = texte_total // ref_module
+        out["capacite_totale_go"] = texte_total
+        out["est_kit"] = out["nb_modules"] > 1
+        return out
+
+    # Au-delà (« 64Go » avec un PN de kit 32 Go), c'est presque toujours une
+    # lecture de texte gonflée — le mot « kit » qui double le compte, une
+    # capacité de disque dur dans la description. Un part number ne peut pas
+    # désigner plus que ce qu'il est : on s'aligne sur lui. Sous-estimer fait
+    # rater une affaire, surestimer fait acheter trop cher.
+    if texte_total and texte_total > ref_total and not specs.get("nb_modules_infere"):
+        out["incoherence_capacite"] = f"{texte_total} Go annoncés vs {ref_total} Go " \
+                                      f"pour {ref['part_number']}"
+
+    out["capacite_module_go"] = ref_module
+    out["nb_modules"] = ref["nb_modules"]
+    out["capacite_totale_go"] = ref_total
+    out["est_kit"] = ref["nb_modules"] > 1
+    out.setdefault("frequence_mhz", None)
+    if not out.get("frequence_mhz"):
+        out["frequence_mhz"] = ref["frequence_mhz"]
+    if not out.get("cas_latency"):
+        out["cas_latency"] = ref["cas_latency"]
+    return out
 
 
 def detecter_exclusions(texte, texte_norm, specs, cfg=None):
@@ -401,53 +475,74 @@ def analyser(titre, description="", nb_photos=0, cfg=None):
 
     exclusion, motif = detecter_exclusions(texte, texte_norm, specs, cfg)
 
-    # Doit-on même regarder cette annonce ? Sans aucun signal DDR4/RAM, on sort.
+    # Doit-on même regarder cette annonce ?
+    # « DDR4 » explicite, ou un part number reconnu, sont les cas confortables.
+    # Mais la majorité des titres Vinted disent seulement « Barrette RAM 16Go »
+    # ou « RAM PC gamer 8go » : exiger la mention DDR4 reviendrait à ignorer le
+    # gros du gisement. On les retient donc, avec un drapeau explicite et une
+    # confiance basse — c'est le prix affiché qui décidera si ça vaut un coup
+    # d'œil, et le drapeau dit quoi vérifier sur les photos.
     mentionne_ddr4 = bool(re.search(r"\bddr\s*4\b", texte_norm)) or bool(pn)
-    mentionne_ram = bool(re.search(r"\b(ram|memoire|barrette|dimm|udimm)\b", texte_norm))
+    # « Corsair Vengeance LPX 16Go » ne contient ni « DDR4 » ni « RAM » : une
+    # marque ET une gamme mémoire reconnues valent signal, sinon on passerait à
+    # côté d'une bonne part des annonces.
+    mentionne_ram = (bool(re.search(r"\b(ram|memoire|barrette|dimm|udimm)\b", texte_norm))
+                     or bool(marque and gamme))
+    generation_incertaine = (not mentionne_ddr4 and mentionne_ram
+                             and bool(specs.get("capacite_module_go")))
 
     ref = None
     if pn:
         ref = ram_db.find_reference_by_pn(pn)
         if ref is None:
             ram_db.signaler_pn_inconnu(pn, marque=marque, titre=titre)
+        else:
+            # Le part number détermine la configuration exacte : il prime sur ce
+            # que dit le titre. « RAM 32Go F4-3600C16D-32GTZN » doit se lire
+            # 2×16 et pas 1×32 — sans cette correction, la valeur de revente est
+            # calculée sur une barrette de 32 Go inexistante et l'affaire est
+            # rejetée à tort.
+            specs = _accorder_specs_au_pn(specs, ref)
 
     # Repli par caractéristiques : sert à estimer une valeur, jamais à
     # affirmer une identité (deux kits aux mêmes specs ne sont pas le même kit).
-    ref_approchee = None
-    if ref is None and specs.get("capacite_module_go") and specs.get("frequence_mhz"):
-        candidats = ram_db.find_references_by_specs(
-            capacite_module=specs["capacite_module_go"],
-            nb_modules=specs.get("nb_modules"),
-            frequence=specs["frequence_mhz"],
-            cas_latency=specs.get("cas_latency"),
-            marque=marque, limit=5)
-        if not candidats and marque:
-            candidats = ram_db.find_references_by_specs(
-                capacite_module=specs["capacite_module_go"],
+    # Le relâchement est progressif — voir ram_db._NIVEAUX_APPROCHE — et devient
+    # conservateur (référence la moins chère) dès que la fréquence manque.
+    ref_approchee = confiance_approche = niveau_approche = None
+    if ref is None:
+        ref_approchee, confiance_approche, niveau_approche = \
+            ram_db.find_reference_approchante(
+                capacite_module=specs.get("capacite_module_go"),
                 nb_modules=specs.get("nb_modules"),
-                frequence=specs["frequence_mhz"], marque=marque, limit=5)
-        if not candidats:
-            candidats = ram_db.find_references_by_specs(
-                capacite_module=specs["capacite_module_go"],
-                nb_modules=specs.get("nb_modules"),
-                frequence=specs["frequence_mhz"], limit=5)
-        if candidats:
-            ref_approchee = candidats[0]
+                frequence=specs.get("frequence_mhz"),
+                cas_latency=specs.get("cas_latency"),
+                marque=marque, gamme=gamme)
 
     # Confiance de l'identification textuelle : c'est elle qui décide si on
     # peut annoncer un part number précis dans la notification.
-    confiance = 0.0
     if ref:
         confiance = 0.90
     elif ref_approchee:
-        confiance = 0.55 if (marque and specs.get("cas_latency")) else 0.40
-    elif specs.get("capacite_module_go") and specs.get("frequence_mhz"):
-        confiance = 0.30
+        confiance = confiance_approche or 0.20
     elif mentionne_ddr4:
         confiance = 0.15
+    else:
+        confiance = 0.0
+
+    # Génération non confirmée : on garde l'annonce, mais la confiance chute.
+    # Sans couche vision, c'est l'utilisateur qui devra trancher sur les photos.
+    if generation_incertaine:
+        confiance = min(confiance, 0.30)
 
     ref_effective = ref or ref_approchee
     drapeaux = []
+    if generation_incertaine:
+        drapeaux.append("génération non précisée dans l'annonce — vérifier l'encoche "
+                        "sur la photo (DDR3 ou DDR4 ?)")
+    if ref_approchee and not specs.get("frequence_mhz"):
+        drapeaux.append("fréquence non annoncée — estimation prudente au prix plancher")
+    if specs.get("incoherence_capacite"):
+        drapeaux.append(f"capacité incohérente : {specs['incoherence_capacite']}")
     if marque in NO_NAME:
         drapeaux.append(f"marque no-name ({marque}) : revente difficile, XMP souvent instable")
     if any(contient_terme(texte_norm, t) for t in HS_TERMES):
@@ -474,11 +569,14 @@ def analyser(titre, description="", nb_photos=0, cfg=None):
         "est_kit": specs.get("est_kit", False),
         "ref": ref,
         "ref_approchee": ref_approchee,
+        "niveau_approche": niveau_approche,
+        "generation_incertaine": generation_incertaine,
         "ref_id": (ref_effective or {}).get("id"),
         "tier": (ref_effective or {}).get("tier"),
         "exclusion": exclusion,
         "rejet_motif": motif,
-        "pertinent": bool(mentionne_ddr4 or (mentionne_ram and specs.get("frequence_mhz"))),
+        "pertinent": bool(mentionne_ddr4 or generation_incertaine
+                          or (mentionne_ram and specs.get("frequence_mhz"))),
         "confiance_texte": round(confiance, 2),
         "qualite_annonce": qualite_annonce(titre, description, nb_photos, specs, pn),
         "drapeaux": drapeaux,

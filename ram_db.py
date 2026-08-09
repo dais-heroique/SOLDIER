@@ -226,7 +226,8 @@ def find_reference_by_pn(pn):
 
 
 def find_references_by_specs(capacite_module=None, nb_modules=None, frequence=None,
-                             cas_latency=None, marque=None, gamme=None, limit=10):
+                             cas_latency=None, marque=None, gamme=None, limit=10,
+                             conservateur=False):
     """Repli quand aucun part number n'est lisible : on cherche par
     caractéristiques. Sert à estimer une valeur de revente, jamais à affirmer
     une identification (un kit vendu comme kit sur cette base serait une
@@ -245,10 +246,96 @@ def find_references_by_specs(capacite_module=None, nb_modules=None, frequence=No
         q.append("AND LOWER(marque)=?"); params.append(marque.lower())
     if gamme:
         q.append("AND LOWER(gamme) LIKE ?"); params.append(f"%{gamme.lower()}%")
-    q.append("ORDER BY liquidite DESC, prix_ref_occasion_eur DESC LIMIT ?")
+    # Quand une caractéristique manque (typiquement la fréquence, absente de la
+    # plupart des titres Vinted), on prend la référence la MOINS chère qui
+    # colle. Supposer du 3600 CL16 sur une annonce qui ne dit rien surestimerait
+    # la revente et ferait acheter trop cher : mieux vaut ne pas alerter que
+    # d'alerter à tort.
+    if conservateur:
+        q.append("ORDER BY prix_ref_occasion_eur ASC, liquidite DESC LIMIT ?")
+    else:
+        q.append("ORDER BY liquidite DESC, prix_ref_occasion_eur DESC LIMIT ?")
     params.append(limit)
     with get_db() as conn:
         return [dict(r) for r in conn.execute(" ".join(q), params).fetchall()]
+
+
+# Niveaux de repli, du plus précis au plus vague. Chaque entrée :
+# (critères utilisés, confiance associée, libellé pour la notification).
+# `freq` absent d'un niveau ⇒ recherche conservatrice (référence la moins chère).
+_NIVEAUX_APPROCHE = [
+    (("cap", "nb", "freq", "cl", "marque", "gamme"), 0.62, "specs + marque + gamme"),
+    (("cap", "nb", "freq", "cl", "marque"),          0.58, "specs + CL + marque"),
+    (("cap", "nb", "freq", "cl"),                    0.50, "specs + CL"),
+    (("cap", "nb", "freq", "marque"),                0.48, "specs + marque"),
+    (("cap", "nb", "freq"),                          0.42, "capacité + fréquence"),
+    (("cap", "freq", "marque"),                      0.38, "capacité + fréquence + marque"),
+    (("cap", "nb", "marque"),                        0.32, "capacité + marque, fréquence inconnue"),
+    (("cap", "marque"),                              0.28, "marque seule, fréquence inconnue"),
+    (("cap", "nb"),                                  0.22, "capacité seule"),
+    (("cap",),                                       0.18, "capacité seule, estimation plancher"),
+]
+
+
+def find_reference_approchante(capacite_module=None, nb_modules=None, frequence=None,
+                               cas_latency=None, marque=None, gamme=None):
+    """Repli quand aucun part number n'est lisible.
+
+    Relâche les critères par paliers jusqu'à trouver une référence plausible.
+    Retourne (référence, confiance, explication) ou (None, 0, None).
+
+    Sert UNIQUEMENT à estimer une valeur de revente, jamais à affirmer une
+    identité : deux kits aux mêmes caractéristiques ne sont pas le même kit et
+    ne doivent jamais être vendus comme tel.
+    """
+    if not capacite_module:
+        return None, 0.0, None
+
+    dispo = {"cap": capacite_module, "nb": nb_modules, "freq": frequence,
+             "cl": cas_latency, "marque": marque, "gamme": gamme}
+
+    for criteres, confiance, libelle in _NIVEAUX_APPROCHE:
+        if any(dispo.get(c) is None for c in criteres):
+            continue
+        conservateur = "freq" not in criteres
+        candidats = find_references_by_specs(
+            capacite_module=dispo["cap"],
+            nb_modules=dispo["nb"] if "nb" in criteres else None,
+            frequence=dispo["freq"] if "freq" in criteres else None,
+            cas_latency=dispo["cl"] if "cl" in criteres else None,
+            marque=dispo["marque"] if "marque" in criteres else None,
+            gamme=dispo["gamme"] if "gamme" in criteres else None,
+            conservateur=conservateur, limit=3)
+        if candidats:
+            return candidats[0], confiance, libelle
+    return None, 0.0, None
+
+
+def prix_plancher(capacite_module, nb_modules=1):
+    """Valeur de revente la plus basse crédible pour une capacité donnée.
+
+    Filet de sécurité quand aucune référence ne colle : on prend la médiane des
+    références d'entrée de gamme (tiers C et D) de cette capacité. Se recalibre
+    tout seul avec le reste de la base, plutôt que d'être figé en dur.
+    """
+    with get_db() as conn:
+        lignes = conn.execute("""
+            SELECT prix_ref_occasion_eur / nb_modules AS unitaire
+            FROM ram_reference
+            WHERE actif=1 AND capacite_module_go=? AND tier IN ('C','D')
+            ORDER BY unitaire
+        """, (capacite_module,)).fetchall()
+    if not lignes:
+        with get_db() as conn:
+            lignes = conn.execute("""
+                SELECT MIN(prix_ref_occasion_eur / nb_modules) AS unitaire
+                FROM ram_reference WHERE actif=1 AND capacite_module_go=?
+            """, (capacite_module,)).fetchall()
+    valeurs = [l["unitaire"] for l in lignes if l["unitaire"]]
+    if not valeurs:
+        return None
+    mediane = valeurs[len(valeurs) // 2]
+    return round(mediane * max(1, nb_modules or 1), 2)
 
 
 def list_references(tier=None, marque=None, actif=True, limit=500, offset=0):

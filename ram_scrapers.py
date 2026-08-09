@@ -468,6 +468,116 @@ def rejouer(limite=500, cfg=None, verbose=True):
     return stats
 
 
+def diagnostic(limite=500, cfg=None, exemples=4):
+    """Pourquoi les annonces sont-elles rejetées ?
+
+    Répond à la seule question qui compte quand le bot ne notifie rien : à
+    quelle étape ça bloque, et sur quelles annonces concrètement. Sans ça, on
+    règle des seuils à l'aveugle.
+    """
+    cfg = cfg or ram_config.get()
+    with ram_db.get_db() as conn:
+        lignes = [dict(r) for r in conn.execute(
+            "SELECT * FROM ram_annonce ORDER BY detecte_le DESC LIMIT ?",
+            (limite,)).fetchall()]
+
+    if not lignes:
+        print("Aucune annonce en base. Lance d'abord un scan :")
+        print("    venv/bin/python3 ram_sniper.py --once")
+        return {}
+
+    motifs = {}
+    retenues = []
+    seuil_notif = float(cfg.val("scoring.seuil_notification", 65))
+    seuil_vision = float(cfg.val("scoring.seuil_vision", 55))
+
+    for annonce in lignes:
+        photos = []
+        try:
+            photos = json.loads(annonce.get("photos") or "[]")
+        except (ValueError, TypeError):
+            pass
+        analyse = ram_parser.analyser(annonce.get("titre"), annonce.get("description"),
+                                      len(photos), cfg)
+        pre = ram_scoring.pre_score(annonce, analyse, cfg)
+        if pre["exclusion"]:
+            bloc = motifs.setdefault(pre["exclusion"], {"n": 0, "exemples": []})
+            bloc["n"] += 1
+            if len(bloc["exemples"]) < exemples:
+                bloc["exemples"].append({
+                    "titre": (annonce.get("titre") or "")[:64],
+                    "prix": annonce.get("prix_total"),
+                    "motif": pre["rejet_motif"]})
+        else:
+            retenues.append({
+                "titre": (annonce.get("titre") or "")[:64],
+                "prix": annonce.get("prix_total"),
+                "score": pre["pre_score"], "marge": pre["marge_estimee"],
+                "revente": pre["revente_estimee"],
+                "confiance": analyse.get("confiance_texte"),
+                "niveau": analyse.get("niveau_approche"),
+                "url": annonce.get("url")})
+
+    retenues.sort(key=lambda r: r["score"], reverse=True)
+    notifiables = [r for r in retenues if r["score"] >= seuil_notif]
+
+    total = len(lignes)
+    print(f"\n╔{'═' * 66}╗")
+    print(f"║  DIAGNOSTIC — {total} annonce(s) en base"
+          f"{' ' * max(0, 66 - 26 - len(str(total)))}║")
+    print(f"╚{'═' * 66}╝\n")
+
+    print(f"  Retenues        {len(retenues):>4}  ({len(retenues) / total * 100:.0f} %)")
+    print(f"  ≥ {seuil_notif:.0f} (notifiées) {len(notifiables):>4}")
+    print(f"  Rejetées        {total - len(retenues):>4}\n")
+
+    EXPLICATIONS = {
+        "hors_sujet": "aucun signal RAM exploitable (autre produit, ou titre trop vague)",
+        "non_identifie": "capacité illisible : impossible d'estimer une valeur",
+        "marge": "identifiée, mais pas assez rentable — c'est un rejet SAIN",
+        "sodimm": "SO-DIMM / portable — hors périmètre, rejet voulu",
+        "ecc": "ECC / serveur — hors périmètre, rejet voulu",
+        "ddr3": "DDR3 annoncée — hors périmètre, rejet voulu",
+        "ddr5": "DDR5 annoncée — hors périmètre, rejet voulu",
+        "ddr3_suspecte": "DDR3 déguisée en DDR4 — piège évité",
+        "capacite": "4 Go hors lot, ou capacité hors périmètre",
+    }
+    print("  ── Motifs de rejet ──")
+    for motif, bloc in sorted(motifs.items(), key=lambda x: -x[1]["n"]):
+        print(f"\n  {motif}  ({bloc['n']})")
+        print(f"    {EXPLICATIONS.get(motif, '')}")
+        for ex in bloc["exemples"]:
+            prix = f"{ex['prix']:.0f}€" if ex["prix"] else "?"
+            print(f"      · {prix:>6}  {ex['titre']}")
+            if ex["motif"]:
+                print(f"                {ex['motif'][:70]}")
+
+    if retenues:
+        print("\n  ── Meilleures annonces retenues ──")
+        for r in retenues[:12]:
+            marque_seuil = "🔔" if r["score"] >= seuil_notif else (
+                "👁" if r["score"] >= seuil_vision else "  ")
+            print(f"  {marque_seuil} {r['score']:>5.1f}  {r['prix']:>6.0f}€ → "
+                  f"revente {r['revente']:>5.0f}€  marge {r['marge']:>+5.0f}€  "
+                  f"{r['titre'][:42]}")
+            if r["niveau"]:
+                print(f"           identifiée par : {r['niveau']} "
+                      f"(confiance {r['confiance']})")
+
+    if not notifiables:
+        print(f"\n  ⚠️  Aucune annonce n'atteint le seuil de {seuil_notif:.0f}.")
+        if retenues:
+            print(f"      Le meilleur score est {retenues[0]['score']:.1f}. "
+                  f"Pour recevoir ces annonces,")
+            print(f"      baisse scoring.seuil_notification dans ram_config.yaml.")
+        else:
+            print("      Aucune annonce n'est même retenue : regarde les motifs "
+                  "ci-dessus.")
+    print()
+    return {"total": total, "retenues": len(retenues),
+            "notifiables": len(notifiables), "motifs": {k: v["n"] for k, v in motifs.items()}}
+
+
 def etat_sources(cfg=None):
     """Disponibilité réelle des clients réseau, pour le dashboard."""
     cfg = cfg or ram_config.get()
