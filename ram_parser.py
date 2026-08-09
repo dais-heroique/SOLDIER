@@ -1,0 +1,518 @@
+"""
+ram_parser.py — Identification textuelle d'une annonce DDR4
+═══════════════════════════════════════════════════════════════════════════
+Transforme un titre + une description en caractéristiques exploitables :
+part number, capacité, nombre de barrettes, fréquence, CAS, et surtout
+EXCLUSIONS (SO-DIMM, ECC, DDR3/DDR5, 4 Go) avant tout calcul de score.
+
+── Sur la détection ECC : pourquoi pas une simple recherche de sous-chaîne ──
+La règle « un E ou un W chez Crucial/Kingston = ECC » est vraie, mais
+uniquement À UNE POSITION PRÉCISE du part number :
+    KVR32E22D8/16   → E après la fréquence  = ECC
+    KVR32N22D8/16   → N                     = non-ECC
+    CT16G4WFD8266   → W avant FD            = ECC
+    CT16G4DFD832A   → D                     = non-ECC
+Cherchée en sous-chaîne, cette règle rejette CMK32GX4M2**E**3200C16 — le
+Corsair Vengeance LPX 2×16, c'est-à-dire la référence la plus liquide du
+marché. Ici, chaque constructeur a donc son motif positionnel (ECC_MOTIFS),
+et les PN Corsair/G.Skill ne sont jamais concernés.
+
+De même « A2K43 chez Samsung = ECC » est faux : M378A2K43CB1-CTD est du
+non-ECC parfaitement ordinaire. Chez Samsung c'est le PRÉFIXE qui tranche :
+    M378 = UDIMM non-ECC   M391 = UDIMM ECC   M393 = RDIMM   M471 = SO-DIMM
+"""
+
+import re
+import unicodedata
+
+import ram_config
+import ram_db
+
+# ─────────────────────── NORMALISATION TEXTE ───────────────────────
+_ESPACES = re.compile(r"\s+")
+
+
+def normaliser(texte):
+    """Minuscules, sans accents, ponctuation réduite à des espaces. Permet de
+    chercher 'mémoire vive' et 'MEMOIRE-VIVE' avec le même motif."""
+    if not texte:
+        return ""
+    t = unicodedata.normalize("NFD", str(texte))
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn").lower()
+    t = re.sub(r"[^a-z0-9./+-]+", " ", t)
+    return _ESPACES.sub(" ", t).strip()
+
+
+def contient_terme(texte_norm, terme):
+    """Recherche en mot entier : évite que 'ecc' matche dans 'occasion' ou
+    'seconde', et que 'ddr3' matche dans 'ddr3200' (faute de frappe fréquente
+    pour DDR4 3200)."""
+    t = normaliser(terme)
+    if not t:
+        return False
+    return re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", texte_norm) is not None
+
+
+# ─────────────────────── PART NUMBERS ───────────────────────
+# Un motif par constructeur : plus fiable qu'un motif générique, et permet de
+# déduire la marque du seul PN.
+PN_MOTIFS = [
+    # Corsair : CMK32GX4M2E3200C16, CMW/CMH/CMT/CMD/CMU/CMR
+    ("Corsair", re.compile(r"\bCM[KWHTDUR]\d{1,3}GX4M\d[A-Z]?\d{3,4}C\d{2}[A-Z]?\b", re.I)),
+    # G.Skill : F4-3200C14D-16GTZ / F4-3600C16Q-64GTZN
+    ("G.Skill", re.compile(r"\bF4[-\s]?\d{4}C\d{2}[DSQTK][-\s]?\d{1,3}G[A-Z]{2,5}\b", re.I)),
+    # Kingston FURY / ValueRAM / Server Premier. Les codes de fréquence n'ont
+    # pas la même longueur selon la gamme : KF432 (3 chiffres) vs KVR32 (2).
+    ("Kingston", re.compile(r"\b(?:KF\d{3}|KVR\d{2}|KSM\d{2})[A-Z]?\d{2}"
+                            r"[A-Z0-9]{1,8}?(?:K\d)?/\d{1,3}[A-Z]{0,3}\b", re.I)),
+    # HyperX : HX432C16FB3K2/16
+    ("HyperX", re.compile(r"\bHX\d{3}C\d{2}[A-Z]{2,3}\d?(?:K\d)?/\d{1,3}\b", re.I)),
+    # Crucial Ballistix : BL2K16G36C16U4B / BLM2K8G44C19U4B
+    ("Crucial", re.compile(r"\bBLM?\d?K?\d{1,2}G\d{2}C\d{2}U\d[A-Z]{0,2}\b", re.I)),
+    # Crucial standard : CT16G4DFD832A
+    ("Crucial", re.compile(r"\bCT\d{1,3}G4[A-Z]{3}\d{3,4}[A-Z]?\b", re.I)),
+    # Patriot : PVS432G360C8K / PVB416G360C8K
+    ("Patriot", re.compile(r"\bPV[SBRE]\d{2,3}G\d{3}C\d[A-Z]?K?\b", re.I)),
+    # TeamGroup : TLZGD432G3200HC16CDC01
+    ("TeamGroup", re.compile(r"\bT[A-Z0-9]{2,5}\d{2,3}G\d{4}HC\d{2}[A-Z]{3}\d{2}\b", re.I)),
+    # SK Hynix : HMA82GU6DJR8N-XN
+    ("SK Hynix", re.compile(r"\bHMA\d{2}G[UR]\d[A-Z]{3}\d[A-Z](?:[-\s]?[A-Z0-9]{2,3})?\b", re.I)),
+    # Samsung : M378A2G43AB3-CWE — M378 (UDIMM non-ECC) + A (DDR4) + densité
+    # + révision + code de fréquence. Le préfixe M391/M393 est traité en ECC.
+    ("Samsung", re.compile(r"\bM\d{3}A\d[A-Z]\d{2}[A-Z]{2}\d(?:[-\s]?[A-Z0-9]{3})?\b", re.I)),
+    # Micron : MTA16ATF2G64AZ-3G2
+    ("Micron", re.compile(r"\bMTA\d{1,2}[A-Z]{3}\d[A-Z]\d{2}[A-Z]{2}(?:[-\s]?\w{3,6})?\b", re.I)),
+    # ADATA XPG : AX4U320038G16A-DB35
+    ("ADATA", re.compile(r"\bAX4U\d{4,7}G\d{2}[A-Z][-\s]?[A-Z]{2}\d{2}\b", re.I)),
+]
+
+# Marques citées en clair (repli quand aucun PN n'est lisible)
+MARQUES = {
+    "corsair": "Corsair", "g.skill": "G.Skill", "gskill": "G.Skill", "g skill": "G.Skill",
+    "kingston": "Kingston", "hyperx": "HyperX", "crucial": "Crucial", "ballistix": "Crucial",
+    "patriot": "Patriot", "teamgroup": "TeamGroup", "team group": "TeamGroup",
+    "t-force": "TeamGroup", "adata": "ADATA", "xpg": "ADATA", "samsung": "Samsung",
+    "hynix": "SK Hynix", "sk hynix": "SK Hynix", "micron": "Micron",
+    "qiyida": "Qiyida", "kingspec": "Kingspec", "juhor": "JUHOR", "snoamoo": "Snoamoo",
+    "gloway": "Gloway", "asgard": "Asgard", "kimtigo": "Kimtigo", "zifei": "Zifei",
+    "netac": "Netac",
+}
+
+NO_NAME = {"Qiyida", "Kingspec", "JUHOR", "Snoamoo", "Gloway", "Asgard",
+           "Kimtigo", "Zifei", "Netac"}
+
+GAMMES = [
+    ("trident z royal", "Trident Z Royal"), ("trident z neo", "Trident Z Neo"),
+    ("trident z rgb", "Trident Z RGB"), ("trident z", "Trident Z"),
+    ("ripjaws v", "Ripjaws V"), ("ripjaws", "Ripjaws V"),
+    ("vengeance rgb pro sl", "Vengeance RGB Pro SL"),
+    ("vengeance rgb pro", "Vengeance RGB Pro"), ("vengeance rgb", "Vengeance RGB Pro"),
+    ("vengeance lpx", "Vengeance LPX"), ("vengeance", "Vengeance LPX"),
+    ("dominator platinum rgb", "Dominator Platinum RGB"),
+    ("dominator", "Dominator Platinum"),
+    ("fury renegade", "FURY Renegade"), ("renegade", "FURY Renegade"),
+    ("fury beast", "FURY Beast"), ("fury", "Fury"),
+    ("predator", "Predator"), ("ballistix max", "Ballistix MAX"),
+    ("ballistix", "Ballistix"), ("viper steel", "Viper Steel"),
+    ("viper blackout", "Viper 4 Blackout"), ("blackout", "Viper 4 Blackout"),
+    ("viper", "Viper"), ("vulcan", "T-Force Vulcan Z"), ("xtreem", "T-Force Xtreem ARGB"),
+    ("valueram", "ValueRAM"),
+]
+
+# ─────────────────────── ECC : MOTIFS POSITIONNELS ───────────────────────
+# Chaque entrée : (nom, motif ECC/registered, motif explicitement non-ECC).
+ECC_MOTIFS = [
+    # Kingston : KVR32E22D8/16 (E = ECC) vs KVR32N22D8/16 (N = non-ECC)
+    ("Kingston KVR", re.compile(r"\bKVR\d{2}E\d{2}", re.I)),
+    # Kingston Server Premier : KSM26ES8/8ME
+    ("Kingston KSM", re.compile(r"\bKSM\d{2}[EDRLS]", re.I)),
+    # Crucial : CT16G4WFD8266 (W = ECC) vs CT16G4DFD832A
+    ("Crucial W", re.compile(r"\bCT\d{1,3}G4W", re.I)),
+    # Crucial ECC/RDIMM serveur : CT16G4RFD424A
+    ("Crucial R", re.compile(r"\bCT\d{1,3}G4R", re.I)),
+    # SK Hynix : U7 = ECC UDIMM, R7/R8 = RDIMM (vs U6 = non-ECC)
+    ("Hynix U7/R", re.compile(r"\bHMA\d{2}G[UR]7", re.I)),
+    ("Hynix RDIMM", re.compile(r"\bHMA\d{2}GR\d", re.I)),
+    # Samsung : M391 = UDIMM ECC, M393 = RDIMM (vs M378 = non-ECC)
+    ("Samsung M391/M393", re.compile(r"\bM39[13]A", re.I)),
+    # Micron ECC : MTA18ASF… (18 puces) et suffixes -2G2/-3G2 en HZ
+    ("Micron 18AS", re.compile(r"\bMTA\d{2}AS[FN]", re.I)),
+]
+
+# Organisation x4 : n'existe que sur du registered/serveur
+RANK_X4 = re.compile(r"\b[1248]rx4\b", re.I)
+
+# Préfixes SO-DIMM constructeur (une SO-DIMM ne dit pas toujours "sodimm")
+SODIMM_MOTIFS = [
+    re.compile(r"\bM471[AB]", re.I),                 # Samsung SO-DIMM
+    re.compile(r"\bHMA\d{2}GS6", re.I),              # Hynix SO-DIMM
+    re.compile(r"\bCT\d{1,3}G4SFS", re.I),           # Crucial SO-DIMM
+    re.compile(r"\bKVR\d{2}S\d{2}", re.I),           # Kingston SO-DIMM
+    re.compile(r"\bCMSX\d", re.I),                   # Corsair Vengeance SO-DIMM
+    re.compile(r"\bMTA\d{1,2}ATF\d[A-Z]\d{2}HZ", re.I),
+]
+
+# ─────────────────────── SPECS ───────────────────────
+# Capacité : "2x16 go", "2 x 16go", "32 go (2x16)", "16gb"
+RE_KIT = re.compile(r"(?<![a-z0-9])([1-8])\s*[x*]\s*(4|8|16|32)\s*(?:g[ob]|go|gb)?(?![a-z0-9])", re.I)
+# Forme inversée, courante sur les lots : "4go x12", "8 go * 4"
+RE_KIT_INVERSE = re.compile(r"(?<![a-z0-9])(4|8|16|32)\s*(?:go|gb)\s*[x*]\s*(\d{1,2})(?![a-z0-9])", re.I)
+# Quantité annoncée en toutes lettres : "lot de 12", "12 barrettes"
+RE_QUANTITE = re.compile(r"\b(?:lot de|ensemble de|paquet de)\s*(\d{1,2})\b|"
+                         r"\b(\d{1,2})\s*barrettes\b", re.I)
+RE_CAPACITE = re.compile(r"(?<![a-z0-9])(4|8|16|32|64|128)\s*(?:go|gb|g\b)", re.I)
+RE_FREQUENCE = re.compile(r"(?<![a-z0-9])(1333|1600|1866|2133|2400|2666|2800|2933|3000|3066|"
+                          r"3200|3333|3466|3600|3733|3800|4000|4133|4266|4400|4600|4800)"
+                          r"\s*(?:mhz|mt/s)?(?![a-z0-9])", re.I)
+RE_CL = re.compile(r"\bc(?:l|as)?\s*[-]?\s*(9|1[0-9]|2[0-4])(?![0-9])", re.I)
+RE_TIMINGS = re.compile(r"\b(9|1[0-9]|2[0-4])-(\d{1,2})-(\d{1,2})-(\d{1,3})\b")
+RE_RANK = re.compile(r"\b([12])rx(4|8|16)\b", re.I)
+
+RGB_TERMES = ["rgb", "argb", "led", "lumineuse", "lumineuses"]
+BLANC_TERMES = ["blanc", "blanche", "white"]
+MAIN_PROPRE = ["main propre", "remise en main propre", "sur place", "a recuperer",
+               "remise en main", "retrait", "pas d envoi", "pas d'envoi"]
+SANS_BOITE = ["sans boite", "sans boîte", "pas de boite", "sans emballage", "vrac", "nue"]
+DISSIPATEUR_KO = ["sans dissipateur", "dissipateur manquant", "dissipateur abime",
+                  "dissipateur casse", "radiateur manquant", "heatspreader manquant"]
+MEMTEST = ["memtest", "mem test", "memtest86", "teste 8 passes", "sans erreur"]
+TESTE = ["teste", "testee", "testees", "fonctionne", "fonctionnel", "fonctionnelle",
+         "en parfait etat de marche", "ok"]
+HS_TERMES = ["hs", "ne fonctionne pas", "en panne", "defectueux", "defectueuse",
+             "pour piece", "pour pieces", "non fonctionnel"]
+
+
+def _int(m, groupe=1):
+    try:
+        return int(m.group(groupe))
+    except (AttributeError, ValueError, IndexError):
+        return None
+
+
+def extraire_part_number(texte):
+    """(part_number, marque_deduite) ou (None, None). On rend le PN tel qu'écrit
+    dans l'annonce : la normalisation pour le matching se fait plus tard."""
+    for marque, motif in PN_MOTIFS:
+        m = motif.search(texte)
+        if m:
+            return m.group(0).strip(), marque
+    return None, None
+
+
+def detecter_marque(texte_norm, pn_marque=None):
+    if pn_marque:
+        return pn_marque
+    for cle, marque in MARQUES.items():
+        if cle in texte_norm:
+            return marque
+    return None
+
+
+def detecter_gamme(texte_norm):
+    for cle, gamme in GAMMES:
+        if cle in texte_norm:
+            return gamme
+    return None
+
+
+def extraire_specs(texte, texte_norm):
+    """Capacité par barrette, nombre de barrettes, fréquence, CAS."""
+    specs = {"capacite_module_go": None, "nb_modules": None, "capacite_totale_go": None,
+             "frequence_mhz": None, "cas_latency": None, "rank": None, "est_kit": False}
+
+    # 1) Forme explicite "2x16" : la plus fiable, elle donne les deux infos.
+    m_kit = RE_KIT.search(texte_norm)
+    if m_kit:
+        specs["nb_modules"] = int(m_kit.group(1))
+        specs["capacite_module_go"] = int(m_kit.group(2))
+        specs["est_kit"] = specs["nb_modules"] > 1
+    else:
+        m_inv = RE_KIT_INVERSE.search(texte_norm)
+        if m_inv:
+            specs["capacite_module_go"] = int(m_inv.group(1))
+            specs["nb_modules"] = int(m_inv.group(2))
+            specs["est_kit"] = specs["nb_modules"] > 1
+
+    # 2) Sinon, une capacité seule. 64/128 Go annoncés sans "x" sont
+    #    presque toujours un total : on déduit le kit le plus probable.
+    if specs["capacite_module_go"] is None:
+        capacites = [int(x) for x in RE_CAPACITE.findall(texte_norm)]
+        capacites = [c for c in capacites if c in (4, 8, 16, 32, 64, 128)]
+        if capacites:
+            total = max(capacites)
+            if total == 64:
+                specs["capacite_module_go"], specs["nb_modules"] = 32, 2
+                specs["est_kit"] = True
+            elif total == 128:
+                specs["capacite_module_go"], specs["nb_modules"] = 32, 4
+                specs["est_kit"] = True
+            else:
+                specs["capacite_module_go"] = total
+                specs["nb_modules"] = 1
+
+    if specs["capacite_module_go"] and specs["nb_modules"]:
+        specs["capacite_totale_go"] = specs["capacite_module_go"] * specs["nb_modules"]
+
+    # Quantité annoncée hors notation "NxM" : "lot de 12", "12 barrettes".
+    # Indispensable pour l'exception 4 Go, qui ne vaut qu'à partir de 10 unités.
+    m_qte = RE_QUANTITE.search(texte_norm)
+    if m_qte and specs["nb_modules"] in (None, 1):
+        qte = int(m_qte.group(1) or m_qte.group(2))
+        if 2 <= qte <= 40:
+            specs["nb_modules"] = qte
+            specs["est_kit"] = True
+
+    # "kit", "paire", "duo" → c'est un kit même sans quantité explicite
+    if not specs["est_kit"] and re.search(r"\b(kit|paire|duo)\b", texte_norm):
+        specs["est_kit"] = True
+        if specs["nb_modules"] in (None, 1):
+            specs["nb_modules"] = 2
+
+    if specs["capacite_module_go"] and specs["nb_modules"]:
+        specs["capacite_totale_go"] = specs["capacite_module_go"] * specs["nb_modules"]
+
+    freqs = [int(f) for f in RE_FREQUENCE.findall(texte_norm)]
+    if freqs:
+        # La plus haute : les annonces citent souvent "2133 par défaut, 3200 en XMP"
+        specs["frequence_mhz"] = max(freqs)
+        specs["frequence_min_citee"] = min(freqs)
+
+    m_tim = RE_TIMINGS.search(texte_norm)
+    if m_tim:
+        specs["cas_latency"] = int(m_tim.group(1))
+    else:
+        specs["cas_latency"] = _int(RE_CL.search(texte_norm))
+
+    m_rank = RE_RANK.search(texte_norm)
+    if m_rank:
+        specs["rank"] = f"{m_rank.group(1)}Rx{m_rank.group(2)}"
+    return specs
+
+
+def detecter_exclusions(texte, texte_norm, specs, cfg=None):
+    """Retourne (motif_exclusion, explication) ou (None, None).
+    Ordre volontaire : les exclusions physiques d'abord (SO-DIMM, ECC), puis
+    la génération, puis la capacité — pour que le message d'erreur soit le
+    plus informatif possible."""
+    cfg = cfg or ram_config.get()
+    perim = cfg.section("perimetre")
+    excl = perim.get("exclusions", {}) or {}
+
+    # ── SO-DIMM / portable ──
+    for terme in excl.get("sodimm", []):
+        if contient_terme(texte_norm, terme):
+            return "sodimm", f"SO-DIMM/portable : « {terme} »"
+    for motif in SODIMM_MOTIFS:
+        if motif.search(texte):
+            return "sodimm", f"part number SO-DIMM ({motif.search(texte).group(0)})"
+
+    # ── ECC / registered / serveur ──
+    for terme in excl.get("ecc", []):
+        if contient_terme(texte_norm, terme):
+            return "ecc", f"ECC/serveur : « {terme} »"
+    for nom, motif in ECC_MOTIFS:
+        if motif.search(texte):
+            return "ecc", f"part number ECC ({nom} : {motif.search(texte).group(0)})"
+    if RANK_X4.search(texte_norm):
+        return "ecc", "organisation x4 : registered/serveur uniquement"
+
+    # ── Autres générations ──
+    for terme in excl.get("generation", []):
+        if contient_terme(texte_norm, terme):
+            gen = "ddr5" if "5" in terme else "ddr3"
+            return gen, f"génération hors périmètre : « {terme} »"
+
+    # ── DDR3 déguisée en DDR4 : le piège n°1 sur Vinted ──
+    pieges = perim.get("pieges_ddr3", {}) or {}
+    freq = specs.get("frequence_mhz")
+    freq_min = int(perim.get("frequence_min", 2133))
+    if freq and freq < freq_min:
+        return "ddr3_suspecte", (f"fréquence {freq} MHz < {freq_min} : DDR3 quasi certaine "
+                                 f"malgré la mention DDR4")
+    for terme in pieges.get("plateformes", []):
+        if contient_terme(texte_norm, terme):
+            return "ddr3_suspecte", f"plateforme DDR3 mentionnée : « {terme} »"
+    for terme in pieges.get("modeles", []):
+        if contient_terme(texte_norm, terme):
+            return "ddr3_suspecte", f"modèle connu en DDR3 : « {terme} »"
+
+    # ── Capacité ──
+    cap = specs.get("capacite_module_go")
+    autorisees = perim.get("capacites_autorisees", [8, 16, 32])
+    if cap is not None and cap not in autorisees:
+        if cap == 4:
+            exc = perim.get("exception_4go", {}) or {}
+            nb = specs.get("nb_modules") or 1
+            if exc.get("actif") and nb >= int(exc.get("nb_min", 10)):
+                return None, None      # lot 4 Go : le contrôle de prix se fait au scoring
+            return "capacite", "barrette 4 Go (hors lot de 10+ à bas prix)"
+        return "capacite", f"capacité {cap} Go hors périmètre"
+
+    return None, None
+
+
+def qualite_annonce(titre, description, nb_photos, specs, pn):
+    """Note 0-100 : titre précis, photos présentes, description détaillée.
+    Une annonce bâclée cache plus souvent un problème qu'une bonne affaire —
+    et surtout elle prend du temps à traiter (questions au vendeur, photos à
+    redemander)."""
+    note = 0.0
+    if pn:
+        note += 30                                  # part number annoncé : le signal le plus fort
+    if specs.get("frequence_mhz"):
+        note += 12
+    if specs.get("cas_latency"):
+        note += 8
+    if specs.get("capacite_module_go") and specs.get("nb_modules"):
+        note += 10
+
+    note += min(nb_photos, 4) * 5                   # jusqu'à 20 points
+
+    longueur = len(description or "")
+    if longueur >= 300:
+        note += 12
+    elif longueur >= 120:
+        note += 8
+    elif longueur >= 40:
+        note += 4
+
+    texte_norm = normaliser(f"{titre} {description}")
+    if any(contient_terme(texte_norm, t) for t in MEMTEST):
+        note += 8
+    elif any(contient_terme(texte_norm, t) for t in TESTE):
+        note += 4
+    return round(min(note, 100.0), 1)
+
+
+def analyser(titre, description="", nb_photos=0, cfg=None):
+    """Analyse complète d'une annonce. Retourne un dict prêt pour le scoring.
+
+    Ne lève jamais : une annonce mal formée doit ressortir en 'non identifiée',
+    pas faire tomber le worker de scraping.
+    """
+    cfg = cfg or ram_config.get()
+    texte = f"{titre or ''}\n{description or ''}"
+    texte_norm = normaliser(texte)
+
+    pn, pn_marque = extraire_part_number(texte)
+    specs = extraire_specs(texte, texte_norm)
+    marque = detecter_marque(texte_norm, pn_marque)
+    gamme = detecter_gamme(texte_norm)
+
+    exclusion, motif = detecter_exclusions(texte, texte_norm, specs, cfg)
+
+    # Doit-on même regarder cette annonce ? Sans aucun signal DDR4/RAM, on sort.
+    mentionne_ddr4 = bool(re.search(r"\bddr\s*4\b", texte_norm)) or bool(pn)
+    mentionne_ram = bool(re.search(r"\b(ram|memoire|barrette|dimm|udimm)\b", texte_norm))
+
+    ref = None
+    if pn:
+        ref = ram_db.find_reference_by_pn(pn)
+        if ref is None:
+            ram_db.signaler_pn_inconnu(pn, marque=marque, titre=titre)
+
+    # Repli par caractéristiques : sert à estimer une valeur, jamais à
+    # affirmer une identité (deux kits aux mêmes specs ne sont pas le même kit).
+    ref_approchee = None
+    if ref is None and specs.get("capacite_module_go") and specs.get("frequence_mhz"):
+        candidats = ram_db.find_references_by_specs(
+            capacite_module=specs["capacite_module_go"],
+            nb_modules=specs.get("nb_modules"),
+            frequence=specs["frequence_mhz"],
+            cas_latency=specs.get("cas_latency"),
+            marque=marque, limit=5)
+        if not candidats and marque:
+            candidats = ram_db.find_references_by_specs(
+                capacite_module=specs["capacite_module_go"],
+                nb_modules=specs.get("nb_modules"),
+                frequence=specs["frequence_mhz"], marque=marque, limit=5)
+        if not candidats:
+            candidats = ram_db.find_references_by_specs(
+                capacite_module=specs["capacite_module_go"],
+                nb_modules=specs.get("nb_modules"),
+                frequence=specs["frequence_mhz"], limit=5)
+        if candidats:
+            ref_approchee = candidats[0]
+
+    # Confiance de l'identification textuelle : c'est elle qui décide si on
+    # peut annoncer un part number précis dans la notification.
+    confiance = 0.0
+    if ref:
+        confiance = 0.90
+    elif ref_approchee:
+        confiance = 0.55 if (marque and specs.get("cas_latency")) else 0.40
+    elif specs.get("capacite_module_go") and specs.get("frequence_mhz"):
+        confiance = 0.30
+    elif mentionne_ddr4:
+        confiance = 0.15
+
+    ref_effective = ref or ref_approchee
+    drapeaux = []
+    if marque in NO_NAME:
+        drapeaux.append(f"marque no-name ({marque}) : revente difficile, XMP souvent instable")
+    if any(contient_terme(texte_norm, t) for t in HS_TERMES):
+        drapeaux.append("annonce mentionnant HS / en panne / pour pièces")
+    if any(contient_terme(texte_norm, t) for t in DISSIPATEUR_KO):
+        drapeaux.append("dissipateur manquant ou abîmé (−25 %)")
+    if nb_photos == 0:
+        drapeaux.append("aucune photo")
+    if specs.get("frequence_min_citee") and specs.get("frequence_mhz") and \
+            specs["frequence_min_citee"] < 2133 <= specs["frequence_mhz"]:
+        drapeaux.append("fréquences DDR3 et DDR4 citées ensemble : vérifier à l'image")
+
+    return {
+        "pn_detecte": pn,
+        "pn_normalise": ram_db.normalize_pn(pn) if pn else None,
+        "marque_detectee": marque,
+        "gamme_detectee": gamme or (ref_effective or {}).get("gamme"),
+        "capacite_module_go": specs.get("capacite_module_go"),
+        "nb_modules": specs.get("nb_modules"),
+        "capacite_totale_go": specs.get("capacite_totale_go"),
+        "frequence_mhz": specs.get("frequence_mhz"),
+        "cas_latency": specs.get("cas_latency"),
+        "rank": specs.get("rank"),
+        "est_kit": specs.get("est_kit", False),
+        "ref": ref,
+        "ref_approchee": ref_approchee,
+        "ref_id": (ref_effective or {}).get("id"),
+        "tier": (ref_effective or {}).get("tier"),
+        "exclusion": exclusion,
+        "rejet_motif": motif,
+        "pertinent": bool(mentionne_ddr4 or (mentionne_ram and specs.get("frequence_mhz"))),
+        "confiance_texte": round(confiance, 2),
+        "qualite_annonce": qualite_annonce(titre, description, nb_photos, specs, pn),
+        "drapeaux": drapeaux,
+        "no_name": marque in NO_NAME,
+        "rgb": any(contient_terme(texte_norm, t) for t in RGB_TERMES),
+        "blanc": any(contient_terme(texte_norm, t) for t in BLANC_TERMES),
+        "main_propre": any(t in texte_norm for t in MAIN_PROPRE),
+        "sans_boite": any(t in texte_norm for t in SANS_BOITE),
+        "dissipateur_manquant": any(contient_terme(texte_norm, t) for t in DISSIPATEUR_KO),
+        "memtest_prouve": any(contient_terme(texte_norm, t) for t in MEMTEST),
+        "hs": any(contient_terme(texte_norm, t) for t in HS_TERMES),
+        "texte_norm": texte_norm,
+    }
+
+
+if __name__ == "__main__":
+    exemples = [
+        ("Ram ddr4 32go corsair", "Kit 2x16 3200mhz CMK32GX4M2E3200C16, testé, sous garantie", 3),
+        ("DDR4 8GB sodimm portable", "pour pc portable", 1),
+        ("Kingston KVR32E22D8/16 16Go", "serveur", 1),
+        ("Corsair Vengeance 16Go DDR4", "2x8 1600mhz pour i7-4790 LGA1150", 2),
+        ("G.Skill Trident Z 3200 CL14 F4-3200C14D-16GTZ", "B-die, 2x8, testé memtest 8 passes", 5),
+        ("Barrettes DDR4 4Go x12", "lot de 12 barrettes 4go 2400", 1),
+        ("RAM DDR5 32go", "2x16 6000", 2),
+        ("Crucial CT16G4DFD832A 16Go 3200", "barrette nue", 1),
+    ]
+    for titre, desc, photos in exemples:
+        r = analyser(titre, desc, photos)
+        verdict = f"❌ {r['exclusion']} — {r['rejet_motif']}" if r["exclusion"] else "✅ retenue"
+        print(f"\n« {titre} »")
+        print(f"   {verdict}")
+        print(f"   PN={r['pn_detecte']} marque={r['marque_detectee']} "
+              f"config={r['nb_modules']}×{r['capacite_module_go']} "
+              f"{r['frequence_mhz']}C{r['cas_latency']} tier={r['tier']} "
+              f"confiance={r['confiance_texte']} qualité={r['qualite_annonce']}")
+        for d in r["drapeaux"]:
+            print(f"   ⚠️  {d}")

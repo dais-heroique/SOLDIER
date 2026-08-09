@@ -772,6 +772,19 @@ def scan_worker():
 # ─────────────────────── FLASK APP ───────────────────────
 app = Flask(__name__)
 
+# Module RAM SNIPER (DDR4 UDIMM desktop) : dashboard monté sur /ram. L'import
+# est défensif — une dépendance manquante côté RAM ne doit pas empêcher SOLDIER
+# de démarrer, elle doit juste désactiver l'onglet.
+try:
+    import ram_routes
+    ram_routes.enregistrer(app)
+    _HAS_RAM = True
+    _RAM_ERR = None
+except Exception as e:
+    _HAS_RAM = False
+    _RAM_ERR = str(e)
+    print(f"⚠️  Module RAM SNIPER indisponible : {e}")
+
 
 class ValidationError(Exception):
     """Payload invalide côté client (champ manquant, valeur incohérente) —
@@ -1273,6 +1286,8 @@ def main():
 
     url = f"http://localhost:{PORT}"
     print(f"\n🎯 PC FLIP SNIPER — app web lancée sur {url}")
+    if _HAS_RAM:
+        print(f"   🎯 RAM SNIPER (DDR4) : {url}/ram")
     print(f"   Pays configuré: {country_cfg['label']} ({country_cfg['code']}) "
           f"— modifiable dans les paramètres du dashboard")
     print(f"   Le scan tourne en fond. Ouvre {url} (ouverture auto dans 1,5s)\n")

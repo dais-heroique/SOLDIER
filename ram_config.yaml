@@ -1,0 +1,285 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# ram_config.yaml — Paramètres métier du RAM SNIPER
+# ═══════════════════════════════════════════════════════════════════════════
+# TOUT ce qui se règle sans toucher au code est ici. Rechargé à chaud toutes
+# les 30 s par les workers : modifier ce fichier ne demande pas de redémarrage.
+# Les secrets (token Telegram, clé Gemini) sont dans .env, JAMAIS ici.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────── SEUILS DE SCORING ───────────────────────────
+scoring:
+  # Pré-score (texte seul, instantané)
+  seuil_notification: 65        # ≥ 65 → notification Telegram immédiate
+  seuil_vision: 55              # ≥ 55 → analyse Gemini (notif seulement si score final ≥ seuil_confirme)
+  seuil_confirme: 75            # score final ≥ 75 → ✅ CONFIRMÉ
+
+  # Marge minimum : rejeter si marge nette < X € ET < Y %.
+  # Une marge de 40 % sur 15 € ne paie pas le temps de traitement.
+  marge_min_eur: 20
+  marge_min_pct: 45
+
+  # Pondérations du pré-score (doivent totaliser 1.0)
+  poids_pre_score:
+    marge: 0.50
+    liquidite: 0.25
+    qualite_annonce: 0.15
+    vendeur: 0.10
+
+  # Pondérations du score final (doivent totaliser 1.0)
+  poids_score_final:
+    marge: 0.40
+    liquidite: 0.20
+    confiance_vision: 0.20
+    vendeur: 0.10
+    logistique: 0.10
+
+  # Normalisation de la marge en note /100 : une marge de `marge_plafond_eur`
+  # vaut 100. Au-delà on plafonne (un coup à 300 € ne doit pas écraser
+  # l'échelle et faire passer tout le reste pour médiocre).
+  marge_plafond_eur: 80
+  marge_pct_plafond: 150
+
+  # Confiance vision en dessous de laquelle on passe en 🟡 PROBABLE
+  confiance_probable_min: 0.50
+  confiance_confirme_min: 0.75
+
+# ─────────────────────────── FRAIS D'ACQUISITION ───────────────────────────
+# Le prix affiché ne veut rien dire. Prix total = affiché + port + protection.
+frais:
+  vinted:
+    protection_pct: 5.0         # protection acheteur ≈ 5 %
+    protection_fixe: 0.70       # + 0,70 €
+    port_defaut: 3.50           # estimation si le port n'est pas connu
+    port_min: 2.0
+    port_max: 5.0
+  leboncoin:
+    protection_pct: 0.0
+    protection_fixe: 0.0
+    port_defaut: 4.50           # 0 si retrait en main propre (détecté au texte)
+  # Frais côté REVENTE, retranchés de la marge estimée
+  revente:
+    vinted_commission_pct: 0.0  # côté vendeur Vinted : 0 (c'est l'acheteur qui paie)
+    leboncoin_commission_pct: 0.0
+    emballage_eur: 1.20         # bulle + carton, par expédition
+
+# ─────────────────────────── PÉRIMÈTRE ───────────────────────────
+perimetre:
+  capacites_autorisees: [8, 16, 32]
+  frequence_min: 2133
+  # Exception 4 Go : lot de N barrettes minimum à ce prix unitaire maximum
+  exception_4go:
+    actif: true
+    nb_min: 10
+    prix_max_unitaire: 1.50
+
+  # Rejet immédiat (score = 0). Recherchés en mot entier, accents ignorés.
+  exclusions:
+    sodimm:
+      - sodimm
+      - so-dimm
+      - so dimm
+      - portable
+      - laptop
+      - pc portable
+      - notebook
+      - 260 pins
+      - 260 broches
+      - mini pc
+      - nuc
+      - macbook
+      - imac
+    ecc:
+      - ecc
+      - registered
+      - rdimm
+      - lrdimm
+      - serveur
+      - server
+      - xeon
+      - epyc
+      - 2rx4
+      - 4rx4
+      - poweredge
+      - proliant
+    generation:
+      - ddr3
+      - ddr3l
+      - ddr2
+      - ddr5
+      - ddr 3
+      - ddr 5
+
+  # Signaux d'une DDR3 vendue (par erreur ou non) comme DDR4 — piège n°1.
+  pieges_ddr3:
+    plateformes:
+      - i5-3570
+      - i7-3770
+      - i5-4590
+      - i7-4790
+      - lga1155
+      - lga 1155
+      - lga1150
+      - lga 1150
+      - socket 1155
+      - socket 1150
+      - fm2
+      - am3
+      - h61
+      - h81
+      - b75
+      - b85
+      - z77
+      - z87
+      - z97
+      - x79
+      - x58
+    modeles:
+      - vengeance pro
+      - ballistix tactical
+      - ballistix sport 1600
+      - hyperx fury 1600
+      - ripjaws x
+      - dominator platinum 1866
+      - vengeance blue
+      - xms3
+
+# ─────────────────────────── MULTIPLICATEURS DE REVENTE ───────────────────────
+# Appliqués au prix de référence pour estimer la valeur réelle de revente.
+multiplicateurs:
+  kit_assorti_origine: 1.25     # +20 à 30 % vs barrettes séparées
+  rgb: 1.20                     # +15 à 25 %
+  couleur_blanche: 1.15
+  low_profile: 1.10             # < 34 mm, compatibilité ventirad
+  memtest_prouve: 1.10          # screenshot MemTest = +10 % et rotation plus rapide
+  dual_rank_2x16: 1.05
+  dissipateur_manquant: 0.75    # −25 %
+  sans_boite: 0.95
+  no_name: 0.50                 # −50 % et rotation × 3
+  rotation_no_name_facteur: 3.0
+
+# ─────────────────────────── SOURCES ───────────────────────────
+sources:
+  vinted:
+    actif: true
+    priorite: 1
+    delai_par_mot_cle_s: [30, 45]     # étalé, jamais en rafale
+    delai_entre_requetes_s: [2.5, 5.0]
+    max_resultats_par_requete: 20
+    backoff_429_s: [60, 120, 300, 600]
+    mots_cles:
+      - ddr4
+      - ddr 4
+      - ddr4 3200
+      - ddr4 3600
+      - ddr4 32go
+      - ddr4 16go
+      - ddr4 8go
+      - kit ddr4
+      - ram pc gamer
+      - ram gaming
+      - memoire vive
+      - barrette ram
+      - ram pc
+      - corsair vengeance
+      - g.skill ripjaws
+      - trident z
+      - kingston fury
+      - hyperx
+      - crucial ballistix
+      - patriot viper
+
+  leboncoin:
+    actif: true
+    priorite: 2
+    delai_par_mot_cle_s: [60, 90]     # anti-bot plus agressif
+    delai_entre_requetes_s: [5.0, 9.0]
+    max_resultats_par_requete: 35
+    backoff_429_s: [120, 300, 900, 1800]
+    # Retrait en main propre = 0 frais, 0 risque de casse
+    departements: ["74", "73", "01", "69"]   # Haute-Savoie, Savoie, Ain, Rhône
+    mots_cles:
+      - ddr4
+      - ddr4 3200
+      - ddr4 16go
+      - ddr4 32go
+      - kit ddr4
+      - ram pc gamer
+      - barrette ram
+      - memoire vive
+      # Le vrai gisement ici : les lots et les PC en panne dont on ne veut que la RAM
+      - lot informatique
+      - pc en panne
+      - pc gamer hs
+      - destockage informatique
+      - lot ram
+
+# ─────────────────────────── COUCHE VISION ───────────────────────────
+vision:
+  actif: true
+  provider: gemini
+  modele: gemini-2.0-flash
+
+  # ⚠️ Les quotas gratuits Google ÉVOLUENT. Ces valeurs sont volontairement
+  # conservatrices : les ajuster ici, jamais dans le code.
+  quota:
+    par_minute: 10
+    par_jour: 200
+    marge_securite: 0.9         # on s'arrête à 90 % du plafond annoncé
+
+  max_photos: 3                 # la première + les 2 plus grandes
+  photo_max_px: 1024            # redimensionnement avant envoi
+  photo_max_octets: 3500000
+  timeout_s: 25
+  max_tentatives: 2
+  reprise_differees_max: 3      # nb de repassages en file après épuisement du quota
+  temperature: 0.1              # lecture de sticker : on veut du déterministe
+
+# ─────────────────────────── TELEGRAM ───────────────────────────
+telegram:
+  actif: true
+  # 'edit' (défaut) : la notification instantanée est MODIFIÉE en place par
+  # l'analyse Gemini. 'second_message' : un deuxième message séparé.
+  notif_mode: edit
+  anti_spam_s: 60               # max 1 nouvelle notification / 60 s
+  # Les éditions (étape 2) ne comptent JAMAIS dans cette limite.
+  notifier_rejets: false        # true = notifier aussi les ❌ REJETÉ par Gemini
+  notifier_appariements: true   # ⚡ COMPLÉTER KIT : toujours prioritaire
+  message_demande_photo: >-
+    Bonjour, pourriez-vous m'envoyer une photo du sticker de la barrette ? Merci !
+
+# ─────────────────────────── APPARIEMENT DE KITS ───────────────────────────
+appariement:
+  actif: true
+  # Marge minimale du kit complet pour déclencher une notification prioritaire
+  marge_kit_min_eur: 30
+  # Bonus attendu du kit assorti vs revente séparée (sert au calcul du prix cible)
+  bonus_kit_pct: 25
+  # On ne considère que le stock encore vendable
+  statuts_stock_eligibles: [recu, en_test, teste_ok, liste]
+  # Tolérance : un PN différent mais mêmes specs n'est JAMAIS un kit.
+  autoriser_specs_seules: false
+
+# ─────────────────────────── CALIBRAGE DES PRIX ───────────────────────────
+calibrage:
+  actif: true
+  heure_job: "04:30"            # job quotidien
+  fenetre_jours: 30             # ventes conclues sur 30 jours
+  min_observations: 3           # en dessous, on ne recalibre pas (bruit)
+  methode: mediane              # mediane | moyenne_tronquee
+  alerte_perime_jours: 14       # alerte dashboard au-delà
+  # Garde-fou : refuser un recalibrage qui ferait bouger le prix de plus de X %
+  # d'un coup (protège d'un lot bradé qui écraserait la référence).
+  variation_max_pct: 40
+
+# ─────────────────────────── EXPLOITATION ───────────────────────────
+run:
+  dry_run: false                # true = aucune notification envoyée
+  log_json: true                # logs structurés
+  log_niveau: INFO
+  purge_annonces_jours: 90      # au-delà, les annonces non achetées sont purgées
+  revalider_annonces_h: 6       # re-vérifier que les annonces notifiées sont en ligne
+
+dashboard:
+  alerte_capital_dormant_pct: 40
+  feed_heures: 24
+  feed_max: 200
