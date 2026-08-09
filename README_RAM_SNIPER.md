@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 74 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 75 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -117,8 +117,19 @@ GEMINI_API_KEY=
 EOF
 ```
 
-Laissez `GEMINI_API_KEY` vide si vous n'en voulez pas, et mettez
-`vision: actif: false` dans `ram_config.yaml`.
+Laissez `GEMINI_API_KEY` vide si vous n'en voulez pas, et créez
+`ram_config.local.yaml` :
+
+```yaml
+vision:
+  actif: false
+```
+
+⚠️ **Ne modifiez pas `ram_config.yaml` directement.** Il est suivi par git :
+toute modification locale fait échouer les `git pull` suivants avec
+*« your local changes would be overwritten by merge »*. `ram_config.local.yaml`
+est ignoré par git, surcharge le fichier versionné clé par clé, et c'est là
+qu'écrit `ram_setup.py`.
 
 Pour trouver le chat ID à la main : écrivez au bot, puis ouvrez
 `https://api.telegram.org/bot<VOTRE_TOKEN>/getUpdates` et relevez
@@ -430,6 +441,7 @@ ram_schema.sql          schéma SQLite complet (14 tables + 3 vues)
 ram_reference_data.py   130 références réelles, part numbers exacts
 ram_db.py               couche base : init, migrations, CRUD, quota, KPI
 ram_config.py           chargement YAML (à chaud) + secrets .env
+ram_config.local.yaml   surcharges propres à la machine (ignoré par git)
 ram_parser.py           identification texte, exclusions, pièges DDR3
 ram_scoring.py          pré-score textuel + score final après vision
 ram_vision.py           VisionProvider / GeminiProvider, quota, cache, file
@@ -441,7 +453,7 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      74 tests, aucun accès réseau
+test_ram_sniper.py      75 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -556,6 +568,16 @@ Lancez `ram_sniper.py --diag` : il montre à quelle étape ça bloque, avec des
 exemples d'annonces. Un gros paquet de rejets `marge` est SAIN — ça veut dire
 que les annonces sont bien identifiées mais pas rentables. Si le meilleur score
 plafonne sous 65, baissez `scoring.seuil_notification`.
+
+**`Your local changes to ram_config.yaml would be overwritten by merge`**
+Une ancienne version de `ram_setup.py` écrivait dans le fichier versionné.
+Restaurez-le puis remettez vos réglages dans le fichier local :
+
+```bash
+git checkout -- ram_config.yaml
+git pull origin main
+venv/bin/python3 ram_setup.py        # réécrit dans ram_config.local.yaml
+```
 
 **Trop de notifications**
 Montez `scoring.seuil_notification` à 70-75, ou `scoring.marge_min_eur`.

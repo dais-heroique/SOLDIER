@@ -838,6 +838,31 @@ def _():
     assert cfg.notif_mode in ("edit", "second_message")
 
 
+@test("surcharge locale : ram_config.yaml n'est jamais modifié")
+def _():
+    import ram_setup
+    # Écrire dans le fichier versionné ferait échouer chaque « git pull » avec
+    # « your local changes would be overwritten by merge » — l'utilisateur reste
+    # bloqué sur une vieille version sans comprendre pourquoi.
+    avant = open(ram_config.CONFIG_FILE, encoding="utf-8").read()
+    existant = os.path.exists(ram_config.LOCAL_FILE)
+    sauvegarde = open(ram_config.LOCAL_FILE, encoding="utf-8").read() if existant else None
+    try:
+        assert ram_setup.basculer_vision(False)
+        apres = open(ram_config.CONFIG_FILE, encoding="utf-8").read()
+        assert avant == apres, "ram_config.yaml a été modifié : les git pull vont casser"
+        assert ram_config.get(force=True).val("vision.actif") is False, \
+            "la surcharge locale n'est pas prise en compte"
+        assert ram_config.get(force=True).val("scoring.seuil_notification"), \
+            "la surcharge locale a effacé le reste de la configuration"
+    finally:
+        if sauvegarde is not None:
+            open(ram_config.LOCAL_FILE, "w", encoding="utf-8").write(sauvegarde)
+        elif os.path.exists(ram_config.LOCAL_FILE):
+            os.remove(ram_config.LOCAL_FILE)
+        ram_config.get(force=True)
+
+
 @test("quota vision : marge de sécurité appliquée")
 def _():
     cfg = ram_config.get()

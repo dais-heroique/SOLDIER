@@ -20,6 +20,10 @@ import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("RAM_CONFIG", os.path.join(BASE_DIR, "ram_config.yaml"))
+# Surcharges locales à la machine, JAMAIS versionnées. C'est ici qu'écrit
+# ram_setup.py : modifier ram_config.yaml (qui est suivi par git) ferait échouer
+# chaque « git pull » avec « your local changes would be overwritten ».
+LOCAL_FILE = os.path.join(BASE_DIR, "ram_config.local.yaml")
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 RELOAD_INTERVAL = 30.0
 
@@ -161,17 +165,43 @@ _lock = threading.Lock()
 _cache = {"config": None, "verifie_le": 0.0}
 
 
+def _mtimes():
+    """Empreinte des deux fichiers de config, pour détecter un changement."""
+    out = []
+    for chemin in (CONFIG_FILE, LOCAL_FILE):
+        try:
+            out.append(os.path.getmtime(chemin))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def charger_local():
+    """Surcharges locales (ram_config.local.yaml). Absent = dict vide."""
+    if not _HAS_YAML:
+        return {}
+    try:
+        with open(LOCAL_FILE, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
 def _charger():
     if not _HAS_YAML:
         return Config(DEFAUTS, erreur="PyYAML absent : défauts intégrés utilisés "
                                       "(pip install pyyaml)")
     try:
-        mtime = os.path.getmtime(CONFIG_FILE)
         with open(CONFIG_FILE, encoding="utf-8") as f:
             brut = yaml.safe_load(f) or {}
-        return Config(_fusion(DEFAUTS, brut), CONFIG_FILE, mtime)
+        # Ordre de priorité : défauts < ram_config.yaml < ram_config.local.yaml
+        fusionne = _fusion(_fusion(DEFAUTS, brut), charger_local())
+        return Config(fusionne, CONFIG_FILE, _mtimes())
     except FileNotFoundError:
-        return Config(DEFAUTS, erreur=f"{CONFIG_FILE} introuvable : défauts utilisés")
+        return Config(_fusion(DEFAUTS, charger_local()),
+                      erreur=f"{CONFIG_FILE} introuvable : défauts utilisés")
     except Exception as e:
         # Un YAML cassé ne doit JAMAIS arrêter les scrapers en cours : on garde
         # la dernière config valide et on remonte l'erreur au dashboard.
@@ -192,12 +222,8 @@ def get(force=False):
             _cache["verifie_le"] = now
             if cfg is None or force:
                 _cache["config"] = _charger()
-            else:
-                try:
-                    if os.path.getmtime(CONFIG_FILE) != cfg.mtime:
-                        _cache["config"] = _charger()
-                except OSError:
-                    pass
+            elif _mtimes() != cfg.mtime:
+                _cache["config"] = _charger()
         return _cache["config"]
 
 

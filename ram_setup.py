@@ -27,6 +27,19 @@ import urllib.request
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 CONFIG_FILE = os.path.join(BASE_DIR, "ram_config.yaml")
+LOCAL_FILE = os.path.join(BASE_DIR, "ram_config.local.yaml")
+
+try:
+    import yaml
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
+
+try:
+    import ram_config
+    _HAS_RAM_CONFIG = True
+except Exception:
+    _HAS_RAM_CONFIG = False
 
 API = "https://api.telegram.org/bot{token}/{methode}"
 
@@ -193,21 +206,59 @@ def ecrire_env(nouvelles):
 
 
 def basculer_vision(actif):
-    """Met à jour `vision.actif` dans ram_config.yaml sans toucher au reste du
-    fichier (pas de réécriture YAML : les commentaires seraient perdus)."""
+    """Active ou coupe la couche vision, via ram_config.local.yaml.
+
+    ⚠️ On n'écrit JAMAIS dans ram_config.yaml : ce fichier est suivi par git, et
+    le modifier ferait échouer chaque « git pull » avec « your local changes
+    would be overwritten by merge ». Les réglages propres à cette machine vont
+    dans ram_config.local.yaml, qui est ignoré par git et surcharge le fichier
+    versionné.
+    """
+    local = ram_config.charger_local() if _HAS_RAM_CONFIG else {}
+    local.setdefault("vision", {})["actif"] = bool(actif)
+
+    entete = ("# Réglages propres à CETTE machine — surchargent ram_config.yaml.\n"
+              "# Fichier ignoré par git : il ne bloquera jamais un « git pull ».\n"
+              "# Écrit par ram_setup.py, éditable à la main sans risque.\n\n")
     try:
-        with open(CONFIG_FILE, encoding="utf-8") as f:
-            contenu = f.read()
-    except FileNotFoundError:
+        if _HAS_YAML:
+            corps = yaml.safe_dump(local, allow_unicode=True, sort_keys=False)
+        else:
+            corps = "vision:\n  actif: %s\n" % str(bool(actif)).lower()
+        with open(LOCAL_FILE, "w", encoding="utf-8") as f:
+            f.write(entete + corps)
+        return True
+    except OSError:
         return False
-    nouveau, n = re.subn(r"(?m)^(vision:\s*\n(?:.*\n)*?\s*actif:\s*)(true|false)",
-                         lambda m: m.group(1) + ("true" if actif else "false"),
-                         contenu, count=1)
-    if not n:
+
+
+def nettoyer_ancienne_modif():
+    """Répare le cas des installations où une version précédente de ce script
+    avait modifié ram_config.yaml directement : tant que ce fichier diverge du
+    dépôt, tous les « git pull » échouent."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "diff", "--name-only", "--", "ram_config.yaml"],
+                           cwd=BASE_DIR, capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None
+    if r.returncode != 0 or "ram_config.yaml" not in r.stdout:
+        return None
+
+    info("ram_config.yaml a été modifié localement (par une ancienne version")
+    info("de ce script). Tant qu'il diverge, « git pull » échoue.")
+    if not oui_non("Restaurer la version du dépôt ? "
+                   "(tes réglages passent dans ram_config.local.yaml)", True):
         return False
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        f.write(nouveau)
-    return True
+    try:
+        subprocess.run(["git", "checkout", "--", "ram_config.yaml"],
+                       cwd=BASE_DIR, capture_output=True, timeout=10, check=True)
+        ok("ram_config.yaml restauré — « git pull » refonctionnera")
+        return True
+    except Exception as e:
+        ko(f"restauration impossible : {e}")
+        info("À faire à la main : git checkout -- ram_config.yaml")
+        return False
 
 
 # ─────────────────────── PARCOURS ───────────────────────
@@ -217,6 +268,7 @@ def main():
     print("\033[1m╚══════════════════════════════════════════════════════════╝\033[0m")
 
     env = lire_env()
+    nettoyer_ancienne_modif()
 
     # ── 1. Token ──
     titre("1/4 · Token du bot Telegram")
@@ -301,7 +353,8 @@ def main():
             activer_vision = False
 
     if basculer_vision(activer_vision):
-        ok(f"ram_config.yaml → vision.actif: {str(activer_vision).lower()}")
+        ok(f"ram_config.local.yaml → vision.actif: {str(activer_vision).lower()}")
+        info("(fichier local, ignoré par git : il ne bloquera pas tes mises à jour)")
     if not activer_vision:
         info("Les notifications diront « vérifie les photos toi-même »")
         info("au lieu d'annoncer une analyse qui n'arriverait jamais.")
