@@ -578,6 +578,7 @@ TIER_D = [
       notes="Netac hors gamme premium. Un peu mieux distribué que les autres no-name."),
 
     # ── Exception 4 Go : uniquement en lot de 10+ à moins de 1,50 € pièce ──
+    # (voir plus bas TIER_MILIEU pour les marques secondaires légitimes)
     R("NONAME:LOT-4GO-DDR4", "générique", "lot 4 Go", 4, 1, 2400, 17,
       tier="D", prix=6, liq=1, rot=60, couleur="vert", haut=31, volt=1.20,
       pn_ok=False, alias=["lot ram 4go ddr4", "barrettes 4 go ddr4"],
@@ -586,7 +587,86 @@ TIER_D = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-REFERENCES = TIER_S + TIER_A + TIER_B + TIER_C + TIER_D
+#  MARQUES SECONDAIRES — légitimes, mais moins cotées en France
+#  ═════════════════════════════════════════════════════════════════════════
+#  Vues régulièrement sur Vinted et pourtant absentes des grandes gammes. Sans
+#  elles, une annonce « Kit Lexar THOR 16 Go 3600 » se faisait valoriser au
+#  tarif d'un Ballistix ou d'un Corsair — c'est-à-dire 40 % trop cher.
+#
+#  Ces constructeurs n'impriment pas de part number stable et lisible sur le
+#  sticker : la clé est donc une clé de gamme (MARQUE:GAMME-FRÉQUENCE-CONFIG)
+#  et le rapprochement se fait sur marque + caractéristiques. `pn_verifie` est
+#  à 0 : ce ne sont pas des références constructeur exactes, et le dashboard
+#  les signale comme telles.
+# ═══════════════════════════════════════════════════════════════════════════
+TIER_MILIEU = [
+    R("LEXAR:THOR-3600-2X8", "Lexar", "THOR", 8, 2, 3600, 18,
+      tier="C", prix=48, liq=2, rot=18, couleur="noir", haut=44, pn_ok=False,
+      alias=["lexar thor", "thor ddr4"],
+      notes="Correct techniquement, mais peu connue en FR : se revend 30 à 40 % "
+            "sous un Corsair équivalent."),
+    R("LEXAR:THOR-3600-2X8-BLANC", "Lexar", "THOR", 8, 2, 3600, 18,
+      tier="C", prix=55, liq=2, rot=18, couleur="blanc", haut=44, pn_ok=False,
+      alias=["lexar thor white", "thor blanc"]),
+    R("LEXAR:THOR-3200-2X16", "Lexar", "THOR", 16, 2, 3200, 16,
+      tier="C", prix=82, liq=2, rot=20, couleur="noir", haut=44, pn_ok=False),
+
+    R("APACER:PANTHER-3200-2X8", "Apacer", "Panther", 8, 2, 3200, 16,
+      tier="C", prix=42, liq=2, rot=22, couleur="noir", haut=40, pn_ok=False,
+      alias=["apacer panther", "apacer ddr4"]),
+    R("APACER:NOX-3600-2X16", "Apacer", "NOX", 16, 2, 3600, 18,
+      tier="C", prix=85, liq=2, rot=22, couleur="noir", haut=45, pn_ok=False,
+      alias=["apacer nox"]),
+
+    R("KLEVV:BOLT-3200-2X8", "KLEVV", "BOLT X", 8, 2, 3200, 16,
+      tier="C", prix=42, liq=2, rot=22, couleur="noir", haut=40, pn_ok=False,
+      alias=["klevv bolt", "klevv ddr4"],
+      notes="Puces SK Hynix (KLEVV est la marque grand public d'Essencore/SKH)."),
+    R("KLEVV:CRAS-3600-2X16", "KLEVV", "CRAS XR RGB", 16, 2, 3600, 18,
+      tier="C", prix=92, liq=2, rot=24, rgb=True, couleur="noir", haut=45, pn_ok=False,
+      alias=["klevv cras"]),
+
+    R("SP:XPOWER-3200-2X8", "Silicon Power", "XPOWER Turbine", 8, 2, 3200, 16,
+      tier="C", prix=40, liq=2, rot=24, couleur="noir", haut=44, pn_ok=False,
+      alias=["silicon power xpower", "sp xpower"]),
+    R("SP:XPOWER-3200-2X16", "Silicon Power", "XPOWER Turbine", 16, 2, 3200, 16,
+      tier="C", prix=76, liq=2, rot=24, couleur="noir", haut=44, pn_ok=False),
+
+    R("PNY:XLR8-3200-2X8", "PNY", "XLR8 Gaming", 8, 2, 3200, 16,
+      tier="C", prix=44, liq=2, rot=20, couleur="noir", haut=42, pn_ok=False,
+      alias=["pny xlr8", "xlr8 gaming"]),
+    R("PNY:XLR8-3200-2X16", "PNY", "XLR8 Gaming", 16, 2, 3200, 16,
+      tier="C", prix=82, liq=2, rot=20, couleur="noir", haut=42, pn_ok=False),
+
+    R("GEIL:EVO-3200-2X8", "GeIL", "EVO Potenza", 8, 2, 3200, 16,
+      tier="C", prix=38, liq=2, rot=26, couleur="noir", haut=40, pn_ok=False,
+      alias=["geil evo", "geil ddr4"]),
+    R("GEIL:SUPERLUCE-3600-2X16", "GeIL", "Super Luce RGB", 16, 2, 3600, 18,
+      tier="C", prix=88, liq=2, rot=26, rgb=True, couleur="noir", haut=44, pn_ok=False,
+      alias=["geil super luce"]),
+
+    R("MUSHKIN:REDLINE-3600-2X8", "Mushkin", "Redline", 8, 2, 3600, 16,
+      tier="C", prix=50, liq=2, rot=26, couleur="noir", haut=44, pn_ok=False,
+      alias=["mushkin redline", "mushkin ddr4"]),
+
+    R("TRANSCEND:JETRAM-3200-1X16", "Transcend", "JetRam", 16, 1, 3200, 22,
+      tier="C", prix=36, liq=2, rot=24, couleur="vert", haut=31, volt=1.20,
+      pn_ok=False, alias=["transcend jetram", "jetram ddr4"]),
+
+    R("NEOFORZA:FAYE-3200-2X8", "Neo Forza", "Faye", 8, 2, 3200, 16,
+      tier="D", prix=30, liq=1, rot=35, couleur="noir", haut=42, pn_ok=False,
+      alias=["neo forza", "neoforza"]),
+
+    R("RAMAXEL:OEM-3200-1X8", "Ramaxel", "OEM nue", 8, 1, 3200, 22,
+      tier="C", prix=15, liq=2, rot=28, couleur="vert", haut=31, volt=1.20,
+      pn_ok=False, alias=["ramaxel"],
+      notes="Fournisseur OEM (Lenovo, HP). ⚠️ Existe massivement en DDR3 : "
+            "vérifier la fréquence avant tout."),
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+REFERENCES = TIER_S + TIER_A + TIER_B + TIER_C + TIER_D + TIER_MILIEU
 
 
 def par_tier():

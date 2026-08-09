@@ -34,14 +34,14 @@ except ImportError:                                    # pragma: no cover
 # Le YAML est la référence ; ces valeurs ne servent que si une clé manque.
 DEFAUTS = {
     "scoring": {
-        "seuil_notification": 65, "seuil_vision": 55, "seuil_confirme": 75,
+        "seuil_notification": 55, "seuil_vision": 45, "seuil_confirme": 70,
         "marge_min_eur": 20, "marge_min_pct": 45,
         "poids_pre_score": {"marge": 0.50, "liquidite": 0.25,
                             "qualite_annonce": 0.15, "vendeur": 0.10},
         "poids_score_final": {"marge": 0.40, "liquidite": 0.20,
                               "confiance_vision": 0.20, "vendeur": 0.10,
                               "logistique": 0.10},
-        "marge_plafond_eur": 80, "marge_pct_plafond": 150,
+        "marge_plafond_eur": 60, "marge_pct_plafond": 100,
         "confiance_probable_min": 0.50, "confiance_confirme_min": 0.75,
     },
     "frais": {

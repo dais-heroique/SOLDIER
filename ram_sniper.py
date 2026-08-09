@@ -449,6 +449,32 @@ def main():
         print(json.dumps(etat(cfg), indent=2, ensure_ascii=False, default=str))
         return
 
+    if "--dashboard" in args:
+        # Dashboard autonome : ne dépend que de Flask, pas du reste de SOLDIER
+        # (app.py tire lbc, curl_cffi, ebay… — une seule de ces dépendances
+        # absente et le dashboard devenait inaccessible).
+        port = 8010
+        for a in args:
+            if a.startswith("--port="):
+                port = int(a.split("=", 1)[1])
+        try:
+            from flask import Flask
+        except ImportError:
+            print("Flask absent : venv/bin/pip install flask")
+            return
+        import ram_routes
+        appli = Flask(__name__)
+        ram_routes.enregistrer(appli)
+        url = f"http://127.0.0.1:{port}/ram"
+        print(f"\n🎯 Dashboard RAM SNIPER : {url}\n   Ctrl+C pour arrêter\n")
+        try:
+            import webbrowser
+            threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+        except Exception:
+            pass
+        appli.run(host="127.0.0.1", port=port, threaded=True, debug=False)
+        return
+
     if "--diag" in args:
         limite = 500
         for a in args:

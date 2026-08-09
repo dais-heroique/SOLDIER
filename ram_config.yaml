@@ -9,9 +9,12 @@
 # ─────────────────────────── SEUILS DE SCORING ───────────────────────────
 scoring:
   # Pré-score (texte seul, instantané)
-  seuil_notification: 65        # ≥ 65 → notification Telegram immédiate
-  seuil_vision: 55              # ≥ 55 → analyse Gemini (notif seulement si score final ≥ seuil_confirme)
-  seuil_confirme: 75            # score final ≥ 75 → ✅ CONFIRMÉ
+  # Calibrés sur un échantillon réel de 165 annonces Vinted : sur ce marché,
+  # une très bonne affaire (marge +42 € / +40 %) sort autour de 60-65, pas 80.
+  # Un seuil à 65 ne laissait rien passer du tout.
+  seuil_notification: 55        # ≥ 55 → notification Telegram immédiate
+  seuil_vision: 45              # ≥ 45 → analyse Gemini (notif seulement si score final ≥ seuil_confirme)
+  seuil_confirme: 70            # score final ≥ 70 → ✅ CONFIRMÉ
 
   # Marge minimum : rejeter si marge nette < X € ET < Y %.
   # Une marge de 40 % sur 15 € ne paie pas le temps de traitement.
@@ -36,8 +39,11 @@ scoring:
   # Normalisation de la marge en note /100 : une marge de `marge_plafond_eur`
   # vaut 100. Au-delà on plafonne (un coup à 300 € ne doit pas écraser
   # l'échelle et faire passer tout le reste pour médiocre).
-  marge_plafond_eur: 80
-  marge_pct_plafond: 150
+  # Une marge de 60 € sur une barrette de RAM est excellente ; 150 % de marge
+  # est exceptionnel. Des plafonds trop hauts écrasaient toute l'échelle vers
+  # le bas et faisaient passer de vraies affaires pour des annonces médiocres.
+  marge_plafond_eur: 60
+  marge_pct_plafond: 100
 
   # Confiance vision en dessous de laquelle on passe en 🟡 PROBABLE
   confiance_probable_min: 0.50

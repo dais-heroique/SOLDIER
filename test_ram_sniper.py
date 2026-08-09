@@ -299,6 +299,41 @@ def _():
     assert any("incohérente" in d for d in r["drapeaux"])
 
 
+@test("« Kit 16 Go » se lit 2×8, jamais 2×16")
+def _():
+    # Le mot « kit » avec une capacité annoncée seule désigne un TOTAL.
+    # Le lire comme une capacité par barrette double la valeur estimée et fait
+    # payer un kit de 16 Go au prix d'un kit de 32 Go.
+    r = analyse("Kit RAM Lexar THOR White 16 Go DDR4 3600 MHz")
+    assert (r["nb_modules"], r["capacite_module_go"]) == (2, 8), \
+        f"lu {r['nb_modules']}×{r['capacite_module_go']} au lieu de 2×8"
+    assert r["capacite_totale_go"] == 16
+
+    # La notation explicite « 2x16 » reste, elle, une capacité par barrette.
+    r2 = analyse("Kit RAM 2x16 Go DDR4 3600")
+    assert (r2["nb_modules"], r2["capacite_module_go"]) == (2, 16)
+
+
+@test("marque inconnue : estimation conservatrice, jamais au prix d'une grande marque")
+def _():
+    inconnue = analyse("Kit RAM Lexar THOR White 16 Go DDR4 3600 MHz")
+    connue = analyse("Kit RAM Corsair Vengeance 16 Go DDR4 3600 MHz")
+    v_inc = inconnue["ref_approchee"]["prix_ref_occasion_eur"]
+    v_con = connue["ref_approchee"]["prix_ref_occasion_eur"]
+    assert v_inc <= v_con, \
+        f"une marque secondaire ({v_inc}€) ne peut pas valoir plus qu'un Corsair ({v_con}€)"
+
+
+@test("qualité d'annonce : pas de pénalité pour une description que l'API ne fournit pas")
+def _():
+    # L'API catalogue de Vinted ne renvoie pas la description. La noter 0
+    # pénaliserait toutes les annonces Vinted à l'identique.
+    sans_desc = ram_parser.qualite_annonce("RAM DDR4 3200 16Go", "", 1,
+                                           {"frequence_mhz": 3200,
+                                            "capacite_module_go": 16, "nb_modules": 1}, None)
+    assert sans_desc >= 40, f"qualité {sans_desc} : la description absente est sur-pénalisée"
+
+
 @test("prix plancher disponible pour chaque capacité du périmètre")
 def _():
     for capacite in (8, 16, 32):
@@ -795,7 +830,10 @@ section("Configuration et P&L")
 @test("config : valeurs par défaut si une clé manque")
 def _():
     cfg = ram_config.get()
-    assert cfg.val("scoring.seuil_notification") == 65
+    seuil = cfg.val("scoring.seuil_notification")
+    assert isinstance(seuil, (int, float)) and 30 <= seuil <= 90, f"seuil aberrant : {seuil}"
+    assert cfg.val("scoring.seuil_vision") <= seuil, \
+        "le seuil d'analyse doit être sous celui de notification"
     assert cfg.val("cle.qui.nexiste.pas", "défaut") == "défaut"
     assert cfg.notif_mode in ("edit", "second_message")
 

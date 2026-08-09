@@ -96,6 +96,11 @@ MARQUES = {
     "qiyida": "Qiyida", "kingspec": "Kingspec", "juhor": "JUHOR", "snoamoo": "Snoamoo",
     "gloway": "Gloway", "asgard": "Asgard", "kimtigo": "Kimtigo", "zifei": "Zifei",
     "netac": "Netac",
+    # Marques secondaires légitimes, fréquentes sur Vinted FR
+    "lexar": "Lexar", "apacer": "Apacer", "klevv": "KLEVV",
+    "silicon power": "Silicon Power", "pny": "PNY", "geil": "GeIL",
+    "mushkin": "Mushkin", "transcend": "Transcend", "neo forza": "Neo Forza",
+    "neoforza": "Neo Forza", "ramaxel": "Ramaxel",
 }
 
 NO_NAME = {"Qiyida", "Kingspec", "JUHOR", "Snoamoo", "Gloway", "Asgard",
@@ -117,6 +122,10 @@ GAMMES = [
     ("viper blackout", "Viper 4 Blackout"), ("blackout", "Viper 4 Blackout"),
     ("viper", "Viper"), ("vulcan", "T-Force Vulcan Z"), ("xtreem", "T-Force Xtreem ARGB"),
     ("valueram", "ValueRAM"),
+    ("thor", "THOR"), ("panther", "Panther"), ("nox", "NOX"), ("bolt", "BOLT X"),
+    ("cras", "CRAS XR RGB"), ("xpower", "XPOWER Turbine"), ("xlr8", "XLR8 Gaming"),
+    ("super luce", "Super Luce RGB"), ("evo potenza", "EVO Potenza"),
+    ("redline", "Redline"), ("jetram", "JetRam"),
 ]
 
 # ─────────────────────── ECC : MOTIFS POSITIONNELS ───────────────────────
@@ -256,6 +265,10 @@ def extraire_specs(texte, texte_norm):
             else:
                 specs["capacite_module_go"] = total
                 specs["nb_modules"] = 1
+                # Une capacité annoncée seule est une capacité TOTALE. S'il
+                # s'avère plus loin que l'annonce parle d'un kit, il faudra la
+                # diviser, pas la multiplier : « Kit 16 Go » = 2×8, jamais 2×16.
+                specs["capacite_est_totale"] = True
 
     if specs["capacite_module_go"] and specs["nb_modules"]:
         specs["capacite_totale_go"] = specs["capacite_module_go"] * specs["nb_modules"]
@@ -284,6 +297,13 @@ def extraire_specs(texte, texte_norm):
             # Déduit du mot « kit », pas annoncé : ne pas le reprocher au
             # vendeur sous forme d'alerte de cohérence.
             specs["nb_modules_infere"] = True
+            # « Kit 16 Go » annonce un TOTAL de 16 Go, donc 2×8. Multiplier au
+            # lieu de diviser valoriserait un kit de 16 Go au prix d'un kit de
+            # 32 Go — soit environ le double, et un achat à perte assuré.
+            module = specs.get("capacite_module_go")
+            if specs.get("capacite_est_totale") and module and module >= 8 \
+                    and module // 2 in (4, 8, 16, 32):
+                specs["capacite_module_go"] = module // 2
 
     if specs["capacite_module_go"] and specs["nb_modules"]:
         specs["capacite_totale_go"] = specs["capacite_module_go"] * specs["nb_modules"]
@@ -426,36 +446,56 @@ def detecter_exclusions(texte, texte_norm, specs, cfg=None):
 
 
 def qualite_annonce(titre, description, nb_photos, specs, pn):
-    """Note 0-100 : titre précis, photos présentes, description détaillée.
-    Une annonce bâclée cache plus souvent un problème qu'une bonne affaire —
-    et surtout elle prend du temps à traiter (questions au vendeur, photos à
-    redemander)."""
-    note = 0.0
+    """Note 0-100 : à quel point l'annonce est renseignée.
+
+    Notée en RATIO sur les signaux réellement observables, pas en points
+    absolus. L'API catalogue de Vinted ne renvoie ni la description complète ni
+    la galerie photo : compter ces absences comme des zéros pénaliserait toutes
+    les annonces Vinted de la même façon, et cette note (15 % du pré-score)
+    deviendrait un handicap constant plutôt qu'un discriminant.
+    """
+    obtenus = 0.0
+    possibles = 0.0
+
+    # Signaux toujours lisibles depuis le titre
+    possibles += 30
     if pn:
-        note += 30                                  # part number annoncé : le signal le plus fort
+        obtenus += 30                # part number annoncé : le signal le plus fort
+    possibles += 12
     if specs.get("frequence_mhz"):
-        note += 12
+        obtenus += 12
+    possibles += 8
     if specs.get("cas_latency"):
-        note += 8
+        obtenus += 8
+    possibles += 10
     if specs.get("capacite_module_go") and specs.get("nb_modules"):
-        note += 10
+        obtenus += 10
 
-    note += min(nb_photos, 4) * 5                   # jusqu'à 20 points
+    # Photos : comptées seulement si la source nous en a transmis au moins une.
+    if nb_photos:
+        possibles += 20
+        obtenus += 20 if nb_photos >= 3 else 15
 
+    # Description : idem, seulement si on l'a réellement récupérée.
     longueur = len(description or "")
-    if longueur >= 300:
-        note += 12
-    elif longueur >= 120:
-        note += 8
-    elif longueur >= 40:
-        note += 4
+    if longueur:
+        possibles += 12
+        if longueur >= 300:
+            obtenus += 12
+        elif longueur >= 120:
+            obtenus += 8
+        else:
+            obtenus += 4
 
+    # Preuve de test : toujours évaluable, un titre suffit à la mentionner.
+    possibles += 8
     texte_norm = normaliser(f"{titre} {description}")
     if any(contient_terme(texte_norm, t) for t in MEMTEST):
-        note += 8
+        obtenus += 8
     elif any(contient_terme(texte_norm, t) for t in TESTE):
-        note += 4
-    return round(min(note, 100.0), 1)
+        obtenus += 4
+
+    return round(min(obtenus / possibles * 100, 100.0), 1) if possibles else 0.0
 
 
 def analyser(titre, description="", nb_photos=0, cfg=None):

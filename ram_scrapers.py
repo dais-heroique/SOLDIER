@@ -531,26 +531,56 @@ def diagnostic(limite=500, cfg=None, exemples=4):
     print(f"  ≥ {seuil_notif:.0f} (notifiées) {len(notifiables):>4}")
     print(f"  Rejetées        {total - len(retenues):>4}\n")
 
-    EXPLICATIONS = {
-        "hors_sujet": "aucun signal RAM exploitable (autre produit, ou titre trop vague)",
-        "non_identifie": "capacité illisible : impossible d'estimer une valeur",
-        "marge": "identifiée, mais pas assez rentable — c'est un rejet SAIN",
-        "sodimm": "SO-DIMM / portable — hors périmètre, rejet voulu",
-        "ecc": "ECC / serveur — hors périmètre, rejet voulu",
-        "ddr3": "DDR3 annoncée — hors périmètre, rejet voulu",
-        "ddr5": "DDR5 annoncée — hors périmètre, rejet voulu",
-        "ddr3_suspecte": "DDR3 déguisée en DDR4 — piège évité",
-        "capacite": "4 Go hors lot, ou capacité hors périmètre",
+    # Trois familles très différentes. Les confondre donne un « 1 % retenu »
+    # alarmant alors que 90 % des rejets sont exactement ce qu'on veut : une
+    # recherche « ram pc gamer » sur Vinted remonte surtout des PC complets.
+    FAMILLES = {
+        "hors périmètre — REJETS VOULUS": {
+            "sodimm": "SO-DIMM / portable (souvent un PC portable vendu entier)",
+            "ecc": "ECC / serveur",
+            "ddr3": "DDR2 ou DDR3 annoncée",
+            "ddr5": "DDR5 annoncée",
+            "ddr3_suspecte": "DDR3 déguisée en DDR4 — piège évité",
+            "capacite": "4 Go hors lot, ou capacité hors périmètre",
+            "hors_sujet": "pas une annonce de RAM (PC complet, portable, autre produit)",
+        },
+        "identifiées mais pas rentables — SAIN": {
+            "marge": "la RAM est bien reconnue, le prix ne laisse pas de marge",
+        },
+        "à améliorer — vraies limites du module": {
+            "non_identifie": "capacité absente du titre : aucune valeur estimable",
+        },
     }
-    print("  ── Motifs de rejet ──")
-    for motif, bloc in sorted(motifs.items(), key=lambda x: -x[1]["n"]):
-        print(f"\n  {motif}  ({bloc['n']})")
-        print(f"    {EXPLICATIONS.get(motif, '')}")
-        for ex in bloc["exemples"]:
-            prix = f"{ex['prix']:.0f}€" if ex["prix"] else "?"
-            print(f"      · {prix:>6}  {ex['titre']}")
-            if ex["motif"]:
-                print(f"                {ex['motif'][:70]}")
+    for famille, motifs_famille in FAMILLES.items():
+        presents = [(m, motifs[m]) for m in motifs_famille if m in motifs]
+        if not presents:
+            continue
+        total_famille = sum(b["n"] for _, b in presents)
+        print(f"  ── {famille} : {total_famille} ──")
+        for motif, bloc in sorted(presents, key=lambda x: -x[1]["n"]):
+            print(f"\n    {motif} ({bloc['n']}) — {motifs_famille[motif]}")
+            for ex in bloc["exemples"]:
+                prix = f"{ex['prix']:.0f}€" if ex["prix"] else "?"
+                print(f"        · {prix:>6}  {ex['titre']}")
+        print()
+
+    inconnus = set(motifs) - {m for f in FAMILLES.values() for m in f}
+    for motif in inconnus:
+        print(f"  {motif} ({motifs[motif]['n']})")
+
+    # Le vrai indicateur : sur les annonces qui sont RÉELLEMENT de la DDR4
+    # desktop, combien sont exploitées ?
+    hors_perimetre = sum(motifs.get(m, {}).get("n", 0)
+                         for m in FAMILLES["hors périmètre — REJETS VOULUS"])
+    pertinentes = total - hors_perimetre
+    if pertinentes > 0:
+        print(f"  ── Sur les {pertinentes} annonces réellement DDR4 desktop ──")
+        print(f"     exploitées : {len(retenues)} ({len(retenues) / pertinentes * 100:.0f} %)")
+        non_id = motifs.get("non_identifie", {}).get("n", 0)
+        if non_id:
+            print(f"     non identifiées : {non_id} "
+                  f"({non_id / pertinentes * 100:.0f} %) ← marge de progrès")
+        print()
 
     if retenues:
         print("\n  ── Meilleures annonces retenues ──")

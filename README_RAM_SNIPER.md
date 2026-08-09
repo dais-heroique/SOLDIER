@@ -35,7 +35,7 @@ cd /Volumes/Data3/SOLDIER
 # Dépendances (en plus de celles de SOLDIER)
 venv/bin/pip install pyyaml pillow
 
-# Création des tables + chargement des 113 références
+# Création des tables + chargement des 130 références
 venv/bin/python3 ram_db.py seed
 ```
 
@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 69 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 72 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -171,11 +171,25 @@ Une fois satisfait :
 venv/bin/python3 ram_sniper.py
 ```
 
-Le dashboard est monté sur l'app SOLDIER existante :
+### Le dashboard
+
+Deux façons de l'ouvrir. La plus simple, indépendante du reste de SOLDIER :
+
+```bash
+venv/bin/python3 ram_sniper.py --dashboard    # http://127.0.0.1:8010/ram
+```
+
+Il ne dépend que de Flask et s'ouvre tout seul dans le navigateur. À lancer
+dans un **second terminal**, pendant que `ram_sniper.py` tourne dans le premier.
+
+Ou bien via l'app SOLDIER complète, qui l'expose aussi :
 
 ```bash
 venv/bin/python3 app.py      # puis http://localhost:8000/ram
 ```
+
+Si `app.py` ne démarre pas (une dépendance de SOLDIER manquante, par exemple),
+`--dashboard` fonctionne quand même : c'est tout l'intérêt.
 
 ### Commandes utiles
 
@@ -184,6 +198,7 @@ venv/bin/python3 app.py      # puis http://localhost:8000/ram
 | `ram_sniper.py` | tout : scraping + notifications + vision + calibrage |
 | `ram_sniper.py --dry-run` | idem, sans envoyer une seule notification |
 | `ram_sniper.py --once` | un seul tour de scan puis sortie |
+| `ram_sniper.py --dashboard` | dashboard autonome sur le port 8010 |
 | `ram_sniper.py --diag` | **pourquoi rien n'est notifié** : motifs de rejet + exemples |
 | `ram_sniper.py --replay` | rejoue les annonces archivées à travers le scoring courant |
 | `ram_sniper.py --calibrer` | lance le job de calibrage immédiatement |
@@ -412,7 +427,7 @@ mis en quarantaine **seul** — le reste du scan continue.
 
 ```
 ram_schema.sql          schéma SQLite complet (14 tables + 3 vues)
-ram_reference_data.py   113 références réelles, part numbers exacts
+ram_reference_data.py   130 références réelles, part numbers exacts
 ram_db.py               couche base : init, migrations, CRUD, quota, KPI
 ram_config.py           chargement YAML (à chaud) + secrets .env
 ram_parser.py           identification texte, exclusions, pièges DDR3
@@ -426,7 +441,7 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      69 tests, aucun accès réseau
+test_ram_sniper.py      72 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -481,7 +496,7 @@ Mêmes fichier et conventions que SOLDIER (`soldier.db`), tables préfixées
 
 | Table | Rôle |
 |---|---|
-| `ram_reference` | **le socle** — 113 références, prix, liquidité, rotation |
+| `ram_reference` | **le socle** — 130 références, prix, liquidité, rotation |
 | `ram_annonce` | toute annonce vue, même rejetée (matière du replay) |
 | `ram_vision_analyse` | cache des analyses, clé = url + hash des photos |
 | `ram_vision_file` | file de priorité du worker vision |
@@ -521,6 +536,11 @@ Si le cookie échoue : `pip install -U curl_cffi`.
 **Leboncoin indisponible**
 `pip install lbc`. Le module fonctionne parfaitement sans — Vinted reste la
 priorité 1.
+
+**« Le dashboard n'est pas en ligne »**
+Le dashboard est un serveur web : il faut le lancer. `ram_sniper.py` seul ne
+sert aucune page. Ouvrez un second terminal et lancez
+`venv/bin/python3 ram_sniper.py --dashboard`.
 
 **Aucune notification**
 Lancez `ram_sniper.py --diag` : il montre à quelle étape ça bloque, avec des

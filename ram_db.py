@@ -297,7 +297,12 @@ def find_reference_approchante(capacite_module=None, nb_modules=None, frequence=
     for criteres, confiance, libelle in _NIVEAUX_APPROCHE:
         if any(dispo.get(c) is None for c in criteres):
             continue
-        conservateur = "freq" not in criteres
+        # Conservateur dès qu'une information structurante manque. La marque
+        # compte autant que la fréquence : à 2×8 et 3600 MHz identiques, un
+        # Corsair vaut le double d'une marque obscure. Sans elle, retenir la
+        # référence la plus chère reviendrait à valoriser un Lexar au prix d'un
+        # Ballistix — et à acheter 40 € trop cher.
+        conservateur = ("freq" not in criteres) or ("marque" not in criteres)
         candidats = find_references_by_specs(
             capacite_module=dispo["cap"],
             nb_modules=dispo["nb"] if "nb" in criteres else None,
