@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 72 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 74 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -441,7 +441,7 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      72 tests, aucun accès réseau
+test_ram_sniper.py      74 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -539,8 +539,17 @@ priorité 1.
 
 **« Le dashboard n'est pas en ligne »**
 Le dashboard est un serveur web : il faut le lancer. `ram_sniper.py` seul ne
-sert aucune page. Ouvrez un second terminal et lancez
+sert aucune page. Ouvrez un **second terminal** et lancez
 `venv/bin/python3 ram_sniper.py --dashboard`.
+
+Si cette commande affiche la bannière du bot et se met à scanner au lieu
+d'ouvrir une page, le dépôt local n'est pas à jour : `git pull origin main`.
+
+**`Conflict: terminated by other getUpdates` (HTTP 409)**
+Deux exécutions du bot tournent en même temps. L'API Telegram n'autorise qu'un
+seul `getUpdates` par bot. Depuis la version courante, la seconde instance
+refuse de démarrer et l'explique ; si vous voyez encore ce message, arrêtez
+l'une des deux (Ctrl+C).
 
 **Aucune notification**
 Lancez `ram_sniper.py --diag` : il montre à quelle étape ça bloque, avec des

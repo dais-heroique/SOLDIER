@@ -438,8 +438,66 @@ def demarrer(cfg=None, une_seule_fois=False, avec_callbacks=True):
     return threads
 
 
+# Options reconnues. Une option inconnue doit ARRÊTER le programme : sur une
+# version pas encore à jour, « --dashboard » était silencieusement ignoré et le
+# bot complet démarrait à la place — impossible à comprendre depuis le terminal.
+OPTIONS = {
+    "--dry-run": "n'envoie aucune notification",
+    "--once": "un seul tour de scan puis sortie",
+    "--dashboard": "sert le dashboard web (défaut : port 8010)",
+    "--diag": "explique pourquoi les annonces sont rejetées",
+    "--replay": "rejoue les annonces archivées à travers le scoring courant",
+    "--calibrer": "lance le job de calibrage des prix",
+    "--etat": "état complet du système, en JSON",
+    "--seed": "recharge la base de références",
+    "--force": "démarre même si une autre instance tourne déjà",
+    "--limite=N": "nombre d'annonces à traiter (--diag, --replay)",
+    "--port=N": "port du dashboard",
+}
+
+
+def _valider_options(args, silencieux=False):
+    inconnues = [a for a in args
+                 if a not in OPTIONS
+                 and not a.startswith(("--limite=", "--port="))]
+    if not inconnues:
+        return True
+    if silencieux:
+        return False
+    print(f"\n❌ Option inconnue : {' '.join(inconnues)}\n")
+    print("Options disponibles :")
+    for opt, desc in OPTIONS.items():
+        print(f"  {opt:<16} {desc}")
+    print("\nSi l'option devrait exister, le dépôt local n'est pas à jour :")
+    print("    git pull origin main\n")
+    return False
+
+
+def _verrou_instance():
+    """Empêche deux exécutions simultanées du bot.
+
+    Deux instances, c'est deux fois plus de requêtes vers Vinted — exactement
+    ce qui mène au bannissement qu'on cherche à éviter — et un conflit Telegram
+    (HTTP 409 : l'API n'autorise qu'un seul getUpdates par bot).
+
+    Retourne le descripteur du verrou (à garder ouvert) ou None si occupé.
+    """
+    import fcntl
+    chemin = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ram_sniper.lock")
+    try:
+        fd = open(chemin, "w")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fd.write(str(os.getpid()))
+        fd.flush()
+        return fd
+    except (OSError, BlockingIOError):
+        return None
+
+
 def main():
     args = sys.argv[1:]
+    if not _valider_options(args):
+        sys.exit(2)
     if "--dry-run" in args:
         os.environ["RAM_DRY_RUN"] = "1"
     cfg = ram_config.get(force=True)
@@ -499,6 +557,19 @@ def main():
         ram_db.seed_references()
         return
 
+    # Verrou d'instance : pris seulement pour une vraie exécution du bot.
+    # Le dashboard, --diag et --replay peuvent tourner en parallèle sans risque.
+    verrou = _verrou_instance()
+    if verrou is None and "--force" not in args:
+        print("\n⚠️  Un RAM SNIPER tourne déjà.\n")
+        print("  Deux instances doublent les requêtes vers Vinted (risque de")
+        print("  bannissement) et se disputent l'API Telegram (erreur HTTP 409).\n")
+        print("  • Pour voir le dashboard, c'est une AUTRE commande :")
+        print("        venv/bin/python3 ram_sniper.py --dashboard\n")
+        print("  • Pour arrêter l'instance en cours : Ctrl+C dans son terminal")
+        print("  • Pour passer outre malgré tout : --force\n")
+        sys.exit(1)
+
     print("═" * 68)
     print("  🎯 RAM SNIPER — DDR4 UDIMM desktop")
     print("═" * 68)
@@ -513,6 +584,8 @@ def main():
           f"{quota['restant_jour']}/{quota['plafond_jour']} restants aujourd'hui")
     print(f"  {'🔕' if cfg.dry_run else '🔔'} telegram    mode {cfg.notif_mode}"
           + ("  (DRY-RUN : aucune notification ne sera envoyée)" if cfg.dry_run else ""))
+    print(f"  📊 dashboard   AUTRE terminal : "
+          f"venv/bin/python3 ram_sniper.py --dashboard")
     base = ram_db.stats_base()
     print(f"  📚 références  {base['references']} "
           f"({', '.join(f'{t}:{n}' for t, n in sorted(base['references_par_tier'].items()))})")

@@ -29,3 +29,6 @@ desktop.ini
 .AppleDouble
 .LSOverride
 .claude-flow/
+
+# Verrou d'instance RAM SNIPER
+.ram_sniper.lock

@@ -523,6 +523,18 @@ def boucle_callbacks(intervalle=2.0, cfg=None):
                     print(f"[telegram] erreur de traitement du clic : {e}")
                     repondre_callback(cb["id"], "erreur interne")
         except TelegramError as e:
+            # 409 = un autre processus interroge déjà ce bot. L'API Telegram
+            # n'autorise qu'un seul getUpdates par token : insister ne ferait
+            # que voler les mises à jour à l'autre instance, en alternance, et
+            # les boutons répondraient une fois sur deux. On se retire.
+            if "409" in str(e) or "terminated by other getUpdates" in str(e):
+                print("\n[telegram] ⚠️  Un autre RAM SNIPER écoute déjà ce bot "
+                      "(HTTP 409).")
+                print("[telegram]     Les boutons des notifications sont gérés par "
+                      "l'autre instance.")
+                print("[telegram]     Cette instance continue de scanner et de "
+                      "notifier normalement.\n")
+                return
             print(f"[telegram] getUpdates : {e}")
             time.sleep(10)
         except Exception as e:

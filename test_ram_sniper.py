@@ -878,6 +878,34 @@ def _():
     assert candidats and candidats[0]["occurrences"] == 2
 
 
+@test("une option inconnue est refusée, jamais ignorée en silence")
+def _():
+    import ram_sniper
+    # Sur une version pas à jour, « --dashboard » était ignoré et le bot complet
+    # démarrait : le terminal affichait un scan là où on attendait une page web.
+    assert ram_sniper._valider_options(["--dry-run", "--once"])
+    assert ram_sniper._valider_options(["--diag", "--limite=50"])
+    assert ram_sniper._valider_options(["--dashboard", "--port=8010"])
+    assert not ram_sniper._valider_options(["--dashbord"], silencieux=True), \
+        "faute de frappe acceptée"
+    assert not ram_sniper._valider_options(["--inexistant"], silencieux=True)
+
+
+@test("verrou d'instance : la seconde exécution est refusée")
+def _():
+    import ram_sniper
+    premier = ram_sniper._verrou_instance()
+    assert premier is not None, "le premier verrou doit être obtenu"
+    try:
+        assert ram_sniper._verrou_instance() is None, \
+            "deux instances doubleraient les requêtes Vinted et se disputeraient Telegram"
+    finally:
+        premier.close()
+    apres = ram_sniper._verrou_instance()
+    assert apres is not None, "le verrou doit être libéré à la fermeture"
+    apres.close()
+
+
 @test("replay : rejoue sans planter et compte les rejets")
 def _():
     stats = ram_scrapers.rejouer(200, verbose=False)
