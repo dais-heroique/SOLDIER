@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 59 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 62 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -53,45 +53,94 @@ venv/bin/python3 ram_db.py stats
 
 ## 2. Obtenir les clés
 
-Les secrets vont dans `.env` à la racine du projet — **jamais** dans
-`ram_config.yaml`, qui est versionné. `.env` est déjà dans `.gitignore`.
+### La façon simple
+
+```bash
+venv/bin/python3 ram_setup.py
+```
+
+Le script fait tout : il valide le token, **trouve le chat ID tout seul**,
+écrit le `.env`, et envoie un message de test pour confirmer que la chaîne
+fonctionne. Il demande seulement de coller le token et d'écrire un message au
+bot depuis Telegram.
+
+La seule chose à préparer avant : le token, via **@BotFather** → `/newbot` →
+choisir un nom, puis un identifiant finissant par `bot`.
+
+> Pourquoi il faut écrire au bot d'abord : un bot Telegram **ne peut pas
+> envoyer le premier message**. Tant que le chat n'existe pas, son identifiant
+> n'existe pas non plus. Le script attend donc que vous écriviez, puis lit
+> l'identifiant dans les messages reçus.
+
+Pour recevoir les alertes à deux : créez un groupe, ajoutez-y le bot, écrivez
+dedans. Le script proposera le groupe dans la liste (son id est négatif, du
+type `-1001234567890` — c'est normal).
+
+### Gemini est facultatif
+
+Le script propose Gemini mais **ne l'exige pas**. Sans clé, le module tourne
+en **mode texte seul** :
+
+| | Texte seul | Avec Gemini |
+|---|---|---|
+| Détection, scoring, marges | ✅ | ✅ |
+| Exclusions SO-DIMM / ECC / DDR3 par le texte | ✅ | ✅ |
+| Notifications Telegram, boutons | ✅ | ✅ |
+| Radar d'appariement de kits | ✅ | ✅ |
+| Calibrage des prix, dashboard | ✅ | ✅ |
+| Lecture du sticker sur la photo | ❌ | ✅ |
+| Encoche DDR3 / DDR4, comptage des puces | ❌ | ✅ |
+| Verdicts ✅ CONFIRMÉ / ❌ REJETÉ | ❌ | ✅ |
+
+En texte seul, les notifications restent en ⚡ **NON VÉRIFIÉ** et se terminent
+par *« Vérifie les photos toi-même : longueur de la barrette, position de
+l'encoche, nombre de puces »* — elles n'annoncent jamais une analyse qui
+n'arriverait pas.
+
+Vous pouvez ajouter Gemini plus tard : relancez `ram_setup.py`, il rebascule
+`vision.actif` dans `ram_config.yaml` pour vous.
+
+Clé gratuite si vous la voulez : <https://aistudio.google.com/app/apikey> →
+**Create API key**. Le palier gratuit suffit largement, le module n'analyse
+que les annonces au pré-score ≥ 55.
+
+### La façon manuelle
+
+Les secrets vont dans `.env` à la racine — **jamais** dans `ram_config.yaml`,
+qui est versionné. `.env` est déjà dans `.gitignore`.
 
 ```bash
 cat >> .env <<'EOF'
-TELEGRAM_BOT_TOKEN=123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TELEGRAM_BOT_TOKEN=8123456789:AAH-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TELEGRAM_CHAT_ID=987654321
-GEMINI_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+GEMINI_API_KEY=
 EOF
 ```
 
-### Token Telegram
+Laissez `GEMINI_API_KEY` vide si vous n'en voulez pas, et mettez
+`vision: actif: false` dans `ram_config.yaml`.
 
-1. Ouvrir Telegram, chercher **@BotFather**.
-2. `/newbot`, choisir un nom puis un identifiant finissant par `bot`.
-3. BotFather renvoie le token → `TELEGRAM_BOT_TOKEN`.
+Pour trouver le chat ID à la main : écrivez au bot, puis ouvrez
+`https://api.telegram.org/bot<VOTRE_TOKEN>/getUpdates` et relevez
+`"chat":{"id":987654321`.
 
-### Chat ID
+### Réglage utile en mode texte seul
 
-1. Envoyer n'importe quel message à votre nouveau bot.
-2. Ouvrir dans un navigateur :
-   `https://api.telegram.org/bot<VOTRE_TOKEN>/getUpdates`
-3. Relever `"chat":{"id":987654321` → `TELEGRAM_CHAT_ID`.
+Sans Gemini, seules les annonces au pré-score ≥ `seuil_notification` (65)
+déclenchent une alerte — la bande 55–64, normalement rattrapée par l'analyse
+d'image, ne produit plus rien. Si vous trouvez que vous recevez trop peu :
 
-Pour recevoir les alertes à deux, créez un groupe, ajoutez-y le bot, et
-utilisez l'id du groupe (négatif, du type `-1001234567890`).
+```yaml
+scoring:
+  seuil_notification: 58     # au lieu de 65
+```
 
-### Clé Gemini
+Vérifiez d'abord l'effet avec `ram_sniper.py --replay`.
 
-1. <https://aistudio.google.com/app/apikey> → **Create API key**.
-2. Copier la clé → `GEMINI_API_KEY`.
-
-Le palier gratuit suffit largement : le module n'analyse que les annonces au
-pré-score ≥ 55, soit quelques dizaines par jour.
-
-> ⚠️ **Les quotas gratuits Google évoluent.** Ils sont dans
-> `ram_config.yaml → vision.quota`, jamais en dur dans le code. Si vous voyez
-> des HTTP 429 dans les logs, baissez `par_minute`. Si la file d'attente ne se
-> vide jamais alors que le quota le permet, montez `par_jour`.
+> ⚠️ **Si vous utilisez Gemini : les quotas gratuits Google évoluent.** Ils sont
+> dans `ram_config.yaml → vision.quota`, jamais en dur dans le code. Si vous
+> voyez des HTTP 429 dans les logs, baissez `par_minute`. Si la file d'attente
+> ne se vide jamais alors que le quota le permet, montez `par_jour`.
 
 Vérification :
 
@@ -138,6 +187,7 @@ venv/bin/python3 app.py      # puis http://localhost:8000/ram
 | `ram_sniper.py --replay` | rejoue les annonces archivées à travers le scoring courant |
 | `ram_sniper.py --calibrer` | lance le job de calibrage immédiatement |
 | `ram_sniper.py --etat` | état complet du système, en JSON |
+| `ram_setup.py` | reconfigure Telegram / Gemini |
 | `ram_db.py show S` | affiche les références d'un tier |
 | `ram_db.py calibrage` | liste les références à recalibrer |
 
@@ -374,7 +424,8 @@ ram_calibration.py      collecte des ventes + recalibrage
 ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
-test_ram_sniper.py      59 tests, aucun accès réseau
+ram_setup.py            configuration guidée (chat ID automatique)
+test_ram_sniper.py      62 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -482,9 +533,10 @@ elles repassent en file au renouvellement du quota — visible sur l'onglet
 « Quota vision ».
 
 **Un message reste bloqué sur « Analyse image en cours… »**
-Le worker vision n'a pas démarré (clé Gemini absente) ou le quota est épuisé.
-Dans le second cas le message est automatiquement modifié pour l'indiquer.
-`ram_sniper.py --etat` donne l'état exact.
+Le quota vision est épuisé : le message est automatiquement modifié pour
+l'indiquer, et l'annonce repasse en file au renouvellement.
+Si vous n'avez pas de clé Gemini, ce texte n'apparaît jamais — le message dit
+« Vérifie les photos toi-même ». `ram_sniper.py --etat` donne l'état exact.
 
 **Les prix semblent tous faux**
 Le calibrage n'a pas encore tourné. Voir §4 — c'est l'étape qui compte.

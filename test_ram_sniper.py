@@ -544,7 +544,7 @@ def _():
 section("Notifications")
 
 
-@test("message étape 1 : non vérifié, prix détaillé, analyse annoncée")
+@test("message étape 1 : non vérifié, prix total détaillé")
 def _():
     annonce = {"id": 1, "titre": "Ram ddr4 32go corsair", "prix_affiche": 45.0,
                "frais_port": 4.0, "frais_protection": 2.95, "prix_total": 51.95,
@@ -552,8 +552,31 @@ def _():
     m = ram_telegram._sans_html(ram_telegram.message_etape1(
         annonce, {"pre_score": 72, "revente_estimee": 110, "marge_estimee": 58}))
     assert "NON VÉRIFIÉ" in m and "72" in m
+    # Le prix affiché ET le prix réellement payé doivent apparaître : c'est la
+    # différence entre les deux qui fait rater ou saisir une affaire.
     assert "51.95€" in m and "45€" in m and "2.95€" in m
-    assert "Analyse image en cours" in m
+
+
+@test("avec Gemini opérationnel : le message annonce bien l'analyse")
+def _():
+    annonce = {"id": 1, "titre": "DDR4 32Go", "prix_affiche": 45.0, "prix_total": 51.95}
+
+    class CfgAvecVision:
+        def val(self, chemin, defaut=None):
+            if chemin == "vision.actif":
+                return True
+            if chemin == "vision.provider":
+                return "gemini"
+            return ram_config.get().val(chemin, defaut)
+
+    ancien = ram_config.secret
+    ram_config.secret = lambda nom, defaut=None: "cle-de-test"
+    try:
+        m = ram_telegram._sans_html(ram_telegram.message_etape1(
+            annonce, {"pre_score": 72}, CfgAvecVision()))
+        assert "Analyse image en cours" in m
+    finally:
+        ram_config.secret = ancien
 
 
 @test("message étape 2 : les quatre états produisent le bon en-tête")
@@ -566,6 +589,37 @@ def _():
                "drapeaux": [], "details_revente": []}
         m = ram_telegram._sans_html(ram_telegram.message_etape2(annonce, fin, {}))
         assert marqueur in m, f"{statut} → en-tête incorrect"
+
+
+@test("sans Gemini : le message n'annonce PAS une analyse qui n'arrivera jamais")
+def _():
+    import ram_setup                                              # noqa: F401
+    annonce = {"id": 1, "titre": "DDR4 32Go", "prix_affiche": 45.0, "prix_total": 51.95}
+    pre = {"pre_score": 72, "revente_estimee": 115, "marge_estimee": 63}
+
+    class CfgSansVision:
+        """Config où la vision est éteinte."""
+        def val(self, chemin, defaut=None):
+            return False if chemin == "vision.actif" else ram_config.get().val(chemin, defaut)
+
+    m = ram_telegram._sans_html(ram_telegram.message_etape1(annonce, pre, CfgSansVision()))
+    assert "Analyse image en cours" not in m, \
+        "un « analyse en cours » sans worker vision reste affiché pour toujours"
+    assert "Vérifie les photos" in m, "le mode texte seul doit dire quoi faire à la main"
+
+
+@test("sans clé Gemini, la vision est considérée non opérationnelle")
+def _():
+    import os as _os
+    ancienne = _os.environ.pop("GEMINI_API_KEY", None)
+    ram_config._env_cache = {}
+    try:
+        assert not ram_telegram.vision_operationnelle(ram_config.get()), \
+            "vision annoncée opérationnelle sans clé API"
+    finally:
+        if ancienne:
+            _os.environ["GEMINI_API_KEY"] = ancienne
+        ram_config._env_cache = None
 
 
 @test("état 'à vérifier' propose le message pré-rédigé au vendeur")

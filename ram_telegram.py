@@ -97,8 +97,25 @@ def _config_lisible(annonce):
     return " · ".join(bouts)
 
 
-def message_etape1(annonce, pre):
+def vision_operationnelle(cfg=None):
+    """La couche vision va-t-elle réellement analyser cette annonce ?
+
+    Deux conditions : activée dans le YAML ET clé API présente. Sans les deux,
+    aucune analyse n'arrivera jamais — il ne faut donc pas l'annoncer dans le
+    message (un « ⏳ Analyse en cours… » qui ne se met jamais à jour est pire
+    que pas d'analyse du tout : on attend au lieu d'aller voir les photos).
+    """
+    cfg = cfg or ram_config.get()
+    if not cfg.val("vision.actif", True):
+        return False
+    fournisseur = str(cfg.val("vision.provider", "gemini")).lower()
+    cles = {"gemini": "GEMINI_API_KEY"}
+    return bool(ram_config.secret(cles.get(fournisseur, "GEMINI_API_KEY")))
+
+
+def message_etape1(annonce, pre, cfg=None):
     """⚡ NON VÉRIFIÉ — texte seul, envoyé immédiatement."""
+    cfg = cfg or ram_config.get()
     lignes = [
         f"⚡ <b>NON VÉRIFIÉ</b> · pré-score {pre.get('pre_score', 0):.0f}",
         "",
@@ -115,7 +132,13 @@ def message_etape1(annonce, pre):
         lignes.append(f"Tier {annonce['tier']}")
     for d in (pre.get("drapeaux") or [])[:3]:
         lignes.append(f"⚠️ {_echapper(d)}")
-    lignes += ["", "⏳ Analyse image en cours..."]
+
+    if vision_operationnelle(cfg):
+        lignes += ["", "⏳ Analyse image en cours..."]
+    else:
+        # Mode texte seul : on dit clairement ce qui reste à faire à la main.
+        lignes += ["", "👁 <i>Vérifie les photos toi-même : longueur de la "
+                       "barrette, position de l'encoche, nombre de puces.</i>"]
     return "\n".join(lignes)
 
 
@@ -283,7 +306,7 @@ def notifier_etape1(annonce, pre, cfg=None, chat_id=None):
     if not cfg.val("telegram.actif", True):
         return None
     chat_id = chat_id or ram_config.secret("TELEGRAM_CHAT_ID")
-    texte = message_etape1(annonce, pre)
+    texte = message_etape1(annonce, pre, cfg)
 
     if cfg.dry_run:
         print(f"[dry-run] étape 1 → {annonce.get('url')}\n{_sans_html(texte)}\n")
