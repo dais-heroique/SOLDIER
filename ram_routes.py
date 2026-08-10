@@ -415,6 +415,17 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
 const ETAT = {confirme:"✅ Confirmé", probable:"🟡 Probable", a_verifier:"🔍 À vérifier",
               rejete:"❌ Rejeté", non_verifie:"⚡ Non vérifié",
               quota_epuise:"⏸ Quota épuisé"};
+// Âge de PUBLICATION, pas de détection : sur Vinted une vraie affaire part en
+// minutes, une annonce encore en ligne depuis 10 jours n'en est pas une.
+function age(ts) {
+  if (!ts) return "—";
+  const s = Date.now()/1000 - ts;
+  if (s < 90)    return '<span style="color:var(--ko)">🔥 à l\'instant</span>';
+  if (s < 3600)  return '<span style="color:var(--ko)">🔥 ' + Math.floor(s/60) + " min</span>";
+  if (s < 86400) return Math.floor(s/3600) + " h";
+  const j = Math.floor(s/86400);
+  return '<span style="color:var(--txt2)">' + j + " j</span>";
+}
 
 let ongletActif = "feed";
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
@@ -485,8 +496,9 @@ async function feed() {
         <td class="marge">${marge!=null?eur(marge):"—"}
             <div class="mini">${pct!=null?pct.toFixed(0)+"%":""}</div></td>
         <td class="v-${x.statut_verif}">${ETAT[x.statut_verif]||x.statut_verif}</td>
-        <td class="mini">${new Date(x.detecte_le*1000).toLocaleTimeString("fr-FR",
-            {hour:"2-digit",minute:"2-digit"})}</td></tr>`;
+        <td class="mini">${age(x.publie_le)}
+            <div class="mini">vu ${new Date(x.detecte_le*1000).toLocaleTimeString("fr-FR",
+              {hour:"2-digit",minute:"2-digit"})}</div></td></tr>`;
     }).join("") + "</tbody>";
 }
 

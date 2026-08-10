@@ -18,6 +18,8 @@ se tromper de 15 à 20 % sur les petits montants — exactement la zone où se
 joue la différence entre une affaire et une perte de temps.
 """
 
+import time
+
 import ram_config
 
 # Multiplicateurs appliqués au prix de référence pour estimer la revente réelle.
@@ -247,6 +249,40 @@ def note_vendeur(annonce):
     return round(clamp(note), 1)
 
 
+def ajustement_fraicheur(annonce, cfg=None):
+    """(points, explication) — bonus/malus selon l'âge de l'annonce.
+
+    Le raisonnement est celui du marché, pas celui du code : sur Vinted, une
+    barrette nettement sous-cotée part en minutes. Une annonce qui coche toutes
+    les cases du scoring MAIS qui est en ligne depuis une semaine cache presque
+    toujours quelque chose — dissipateur cassé qu'on ne voit pas, vendeur qui ne
+    répond jamais, ou tout simplement un prix qui n'est pas si bon que ça et une
+    référence de prix à recalibrer.
+
+    C'est un ajustement en points, pas une composante pondérée : il corrige un
+    score déjà calculé sans qu'il faille rééquilibrer les poids du YAML.
+    """
+    cfg = cfg or ram_config.get()
+    publie = annonce.get("publie_le")
+    if not publie:
+        return 0.0, None
+    heures = (time.time() - float(publie)) / 3600.0
+    if heures < 0.25:
+        return 8.0, "publiée il y a moins de 15 min — fenêtre de tir"
+    if heures < 1:
+        return 5.0, "publiée il y a moins d'une heure"
+    if heures < 6:
+        return 2.0, None
+    if heures < 24:
+        return 0.0, None
+    if heures < 72:
+        return -4.0, None
+    if heures < 24 * 7:
+        return -8.0, "en ligne depuis plusieurs jours : d'autres l'ont déjà vue"
+    return -15.0, ("en ligne depuis plus d'une semaine — si le prix était si bon, "
+                   "elle serait partie")
+
+
 def note_logistique(annonce, cfg=None):
     """Retrait en main propre > envoi. Zéro frais, zéro risque de casse, et on
     voit la marchandise avant de payer."""
@@ -358,6 +394,12 @@ def pre_score(annonce, analyse, cfg=None):
     confiance = float(analyse.get("confiance_texte") or 0)
     if confiance < 0.5:
         score = min(score, 72.0)
+
+    points_age, note_age = ajustement_fraicheur(annonce, cfg)
+    score += points_age
+    if note_age:
+        resultat.setdefault("drapeaux", []).append(note_age)
+    resultat["ajustement_fraicheur"] = points_age
 
     resultat["notes"] = {k: round(v, 1) for k, v in notes.items()}
     resultat["pre_score"] = round(clamp(score), 1)

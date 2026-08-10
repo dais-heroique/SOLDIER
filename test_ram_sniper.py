@@ -719,6 +719,67 @@ def _():
         ram_config._env_cache = None
 
 
+@test("anti-spam : une rafale passe, un flot est bridé")
+def _():
+    # Trois bonnes affaires publiées dans la même minute doivent TOUTES partir.
+    # Avec un simple délai de 60 s, seule la première passait et les autres
+    # arrivaient trop tard sur un marché où une affaire tient quelques minutes.
+    with ram_db.get_db() as conn:
+        conn.execute("DELETE FROM ram_notification")
+    cfg = ram_config.get()
+    rafale = int(cfg.val("telegram.rafale_max", 4))
+    envoyees = 0
+    for _ in range(rafale + 3):
+        if ram_telegram.anti_spam_ok(cfg):
+            ram_db.enregistrer_notification({"chat_id": "test", "type": "annonce",
+                                             "etat": "non_verifie", "mode": "edit"})
+            envoyees += 1
+    assert envoyees == rafale, \
+        f"{envoyees} notifications parties au lieu de {rafale} (rafale mal bornée)"
+    with ram_db.get_db() as conn:
+        conn.execute("DELETE FROM ram_notification")
+
+
+@test("âge de publication affiché dans la notification")
+def _():
+    import time as _t
+    maintenant = _t.time()
+    assert "min" in ram_telegram.age_lisible(maintenant - 600)
+    assert "h" in ram_telegram.age_lisible(maintenant - 7200)
+    assert "j" in ram_telegram.age_lisible(maintenant - 3 * 86400)
+    assert ram_telegram.age_lisible(None) is None
+
+    annonce = {"id": 1, "titre": "test", "prix_affiche": 45.0, "prix_total": 51.95,
+               "publie_le": maintenant - 300}
+    m = ram_telegram._sans_html(ram_telegram.message_etape1(annonce, {"pre_score": 70}))
+    assert "Publiée" in m and "min" in m
+
+    vieille = dict(annonce, publie_le=maintenant - 10 * 86400)
+    m2 = ram_telegram._sans_html(ram_telegram.message_etape1(vieille, {"pre_score": 70}))
+    assert "En ligne depuis 10 j" in m2, m2
+    assert "depuis il y a" not in m2, "formulation en double"
+
+
+@test("fraîcheur : une annonce récente monte, une vieille descend")
+def _():
+    import time as _t
+    maintenant = _t.time()
+    base = {"source": "vinted", "prix_affiche": 45.0, "prix_total": 51.95}
+    a = analyse("Corsair Vengeance 32Go", "CMK32GX4M2E3200C16", 2)
+
+    recente = ram_scoring.pre_score(dict(base, publie_le=maintenant - 300), a)
+    vieille = ram_scoring.pre_score(dict(base, publie_le=maintenant - 10 * 86400), a)
+    sans_date = ram_scoring.pre_score(dict(base), a)
+
+    assert recente["ajustement_fraicheur"] > 0
+    assert vieille["ajustement_fraicheur"] < 0
+    assert sans_date["ajustement_fraicheur"] == 0, \
+        "sans date de publication, aucun ajustement ne doit être inventé"
+    assert vieille["pre_score"] < recente["pre_score"]
+    assert any("semaine" in d for d in vieille.get("drapeaux", [])), \
+        "une annonce ancienne doit être signalée comme telle"
+
+
 @test("état 'à vérifier' propose le message pré-rédigé au vendeur")
 def _():
     annonce = {"id": 1, "titre": "test", "prix_affiche": 45.0, "prix_total": 51.95}

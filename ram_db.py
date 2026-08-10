@@ -793,6 +793,17 @@ def maj_notification(notif_id, champs):
                      list(d.values()) + [notif_id])
 
 
+def notifications_recentes(fenetre_s):
+    """Horodatages des notifications envoyées dans les `fenetre_s` dernières
+    secondes. Sert au seau à jetons de l'anti-spam : ce sont les ENVOIS qui
+    comptent, jamais les éditions de message."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT envoye_le FROM ram_notification WHERE envoye_le > ? "
+            "ORDER BY envoye_le DESC", (time.time() - float(fenetre_s),)).fetchall()
+        return [r["envoye_le"] for r in rows]
+
+
 def derniere_notification_le():
     """Sert à l'anti-spam (max 1 notification / 60 s). Les éditions ne comptent
     pas : seul envoye_le est regardé."""

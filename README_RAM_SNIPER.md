@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 75 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 78 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -327,6 +327,25 @@ Vendeur ⭐4.9 (127 ventes)
 Passez `telegram.notif_mode: second_message` si vous préférez un deuxième
 message séparé plutôt qu'une édition.
 
+### L'âge compte autant que le prix
+
+Chaque alerte indique depuis quand l'annonce est en ligne :
+
+| Affichage | Ce que ça veut dire |
+|---|---|
+| 🔥 Publiée il y a 7 min | fenêtre de tir — c'est maintenant |
+| 🕐 Publiée il y a 5 h | encore jouable |
+| 🕐 Publiée il y a 3 j — déjà vue par d'autres | méfiance |
+| 🐌 En ligne depuis 9 j | presque jamais une vraie affaire |
+
+Sur Vinted, une barrette nettement sous-cotée part en minutes. Une annonce qui
+coche toutes les cases du scoring **mais** traîne depuis une semaine cache
+généralement autre chose : un défaut invisible sur les photos, un vendeur qui
+ne répond pas, ou un prix de référence à recalibrer de votre côté.
+
+Le score en tient compte : +8 points sous 15 minutes, −15 au-delà d'une
+semaine.
+
 ### Les quatre verdicts
 
 | État | Signification | Action |
@@ -403,7 +422,8 @@ intéressant (kit 64 Go), et 15 € à 60 % aussi (volume rapide). Seul ce qui
 ```yaml
 telegram:
   notif_mode: edit         # ou second_message
-  anti_spam_s: 60          # max 1 nouvelle notification / minute
+  anti_spam_s: 60          # rythme de croisière : 1 notification / minute
+  rafale_max: 4            # mais jusqu'à 4 d'affilée quand ça sort en vague
 
 vision:
   quota:
@@ -453,7 +473,7 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      75 tests, aucun accès réseau
+test_ram_sniper.py      78 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -578,6 +598,12 @@ git checkout -- ram_config.yaml
 git pull origin main
 venv/bin/python3 ram_setup.py        # réécrit dans ram_config.local.yaml
 ```
+
+**Une seule alerte alors que plusieurs affaires sont sorties**
+Réglez `telegram.rafale_max` (4 par défaut) : c'est le nombre de notifications
+qui peuvent partir d'affilée avant que le rythme ne retombe à une par
+`anti_spam_s`. Les vendeurs publient par vagues le soir ; sans rafale, seule la
+première alerte partait.
 
 **Trop de notifications**
 Montez `scoring.seuil_notification` à 70-75, ou `scoring.marge_min_eur`.

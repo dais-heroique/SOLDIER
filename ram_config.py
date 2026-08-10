@@ -76,7 +76,7 @@ DEFAUTS = {
         "temperature": 0.1,
     },
     "telegram": {
-        "actif": True, "notif_mode": "edit", "anti_spam_s": 60,
+        "actif": True, "notif_mode": "edit", "anti_spam_s": 60, "rafale_max": 4,
         "notifier_rejets": False, "notifier_appariements": True,
         "message_demande_photo": "Bonjour, pourriez-vous m'envoyer une photo "
                                  "du sticker de la barrette ? Merci !",

@@ -246,7 +246,12 @@ telegram:
   # 'edit' (défaut) : la notification instantanée est MODIFIÉE en place par
   # l'analyse Gemini. 'second_message' : un deuxième message séparé.
   notif_mode: edit
-  anti_spam_s: 60               # max 1 nouvelle notification / 60 s
+  # Seau à jetons : `rafale_max` notifications peuvent partir d'affilée, puis
+  # le rythme retombe à une par `anti_spam_s`. Sans la rafale, trois bonnes
+  # affaires publiées dans la même minute donnaient UNE seule alerte et les
+  # deux autres arrivaient trop tard.
+  anti_spam_s: 60               # rythme de croisière : 1 notification / 60 s
+  rafale_max: 4                 # mais jusqu'à 4 d'affilée sur un coup de bourre
   # Les éditions (étape 2) ne comptent JAMAIS dans cette limite.
   notifier_rejets: false        # true = notifier aussi les ❌ REJETÉ par Gemini
   notifier_appariements: true   # ⚡ COMPLÉTER KIT : toujours prioritaire

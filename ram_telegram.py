@@ -85,6 +85,44 @@ def _ligne_prix(annonce):
     return " + ".join(bouts) + f" = <b>{total:.2f}€</b>"
 
 
+def age_lisible(publie_le, maintenant=None):
+    """« il y a 3 min », « il y a 2 h », « il y a 5 j ».
+
+    C'est l'information la plus décisive après le prix : sur Vinted une vraie
+    affaire part en quelques minutes. Une annonce alléchante encore en ligne
+    depuis une semaine n'en est presque jamais une — il y a une raison.
+    """
+    if not publie_le:
+        return None
+    secondes = (maintenant or time.time()) - float(publie_le)
+    if secondes < 0:
+        return "à l'instant"
+    if secondes < 90:
+        return "à l'instant"
+    if secondes < 3600:
+        return f"il y a {int(secondes // 60)} min"
+    if secondes < 86400:
+        heures = int(secondes // 3600)
+        return f"il y a {heures} h"
+    jours = int(secondes // 86400)
+    return f"il y a {jours} j"
+
+
+def _ligne_age(annonce):
+    age = age_lisible(annonce.get("publie_le"))
+    if not age:
+        return None
+    secondes = time.time() - float(annonce["publie_le"])
+    if secondes < 900:
+        return f"🔥 Publiée <b>{age}</b>"          # fenêtre de tir
+    if secondes < 86400:
+        return f"🕐 Publiée {age}"
+    if secondes < 7 * 86400:
+        return f"🕐 Publiée {age} — déjà vue par d'autres"
+    duree = age.replace("il y a ", "")     # « il y a 10 j » → « 10 j »
+    return f"🐌 En ligne depuis {duree} — si c'était une affaire, elle serait partie"
+
+
 def _config_lisible(annonce):
     bouts = []
     if annonce.get("nb_modules") and annonce.get("capacite_module_go"):
@@ -121,9 +159,11 @@ def message_etape1(annonce, pre, cfg=None):
         "",
         f"« {_echapper(annonce.get('titre'))} »",
         _ligne_prix(annonce),
-        "",
-        f"Estimation: {_config_lisible(annonce)}",
     ]
+    ligne_age = _ligne_age(annonce)
+    if ligne_age:
+        lignes.append(ligne_age)
+    lignes += ["", f"Estimation: {_config_lisible(annonce)}"]
     revente = pre.get("revente_estimee")
     marge = pre.get("marge_estimee")
     if revente is not None and marge is not None:
@@ -197,6 +237,9 @@ def message_etape2(annonce, fin, vision, ref=None):
         lignes.append("")
 
     lignes.append(_ligne_prix(annonce))
+    ligne_age = _ligne_age(annonce)
+    if ligne_age:
+        lignes.append(ligne_age)
     revente = fin.get("revente_estimee")
     marge = fin.get("marge_reelle")
     pct = fin.get("marge_reelle_pct")
@@ -292,11 +335,29 @@ def boutons(annonce, etape="1", statut_verif=None):
 
 # ─────────────────────── ENVOI / ÉDITION ───────────────────────
 def anti_spam_ok(cfg=None):
-    """Au plus une NOUVELLE notification par `anti_spam_s`. Les éditions ne
-    passent jamais par ici."""
+    """Peut-on envoyer une NOUVELLE notification maintenant ?
+
+    Seau à jetons plutôt qu'un simple délai fixe. Le délai fixe de 60 s avait un
+    défaut majeur en pratique : quand trois bonnes affaires sortent dans la même
+    minute — ce qui arrive, les vendeurs publient par vagues le soir — seule la
+    première partait, et il fallait attendre une minute par annonce suivante.
+    Sur un marché où une affaire tient quelques minutes, c'est perdre les deux
+    autres.
+
+    Avec le seau : `rafale_max` notifications peuvent partir d'affilée, puis le
+    rythme retombe à une par `anti_spam_s`. Les jetons se rechargent
+    continûment, donc après une période calme la rafale est de nouveau pleine.
+
+    Les éditions de message (étape 2) ne passent jamais par ici.
+    """
     cfg = cfg or ram_config.get()
     delai = float(cfg.val("telegram.anti_spam_s", 60))
-    return (time.time() - ram_db.derniere_notification_le()) >= delai
+    rafale = max(1, int(cfg.val("telegram.rafale_max", 3)))
+    if delai <= 0:
+        return True
+
+    envois = ram_db.notifications_recentes(delai * rafale)
+    return len(envois) < rafale
 
 
 def notifier_etape1(annonce, pre, cfg=None, chat_id=None):
