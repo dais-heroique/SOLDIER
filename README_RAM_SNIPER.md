@@ -21,6 +21,7 @@ se fait à la main depuis Telegram, en quelques secondes.
 7. [Architecture](#7-architecture)
 8. [Base de données](#8-base-de-données)
 9. [Dépannage](#9-dépannage)
+10. [Tourner en continu](#10-tourner-en-continu)
 
 ---
 
@@ -45,7 +46,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 81 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 83 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -215,6 +216,8 @@ Si `app.py` ne démarre pas (une dépendance de SOLDIER manquante, par exemple),
 | `ram_sniper.py --calibrer` | lance le job de calibrage immédiatement |
 | `ram_sniper.py --etat` | état complet du système, en JSON |
 | `ram_setup.py` | reconfigure Telegram / Gemini |
+| `ram_service.py install` | fait tourner le bot en fond, en permanence |
+| `ram_service.py status` | le service tourne-t-il ? les workers sont-ils vivants ? |
 | `ram_db.py show S` | affiche les références d'un tier |
 | `ram_db.py calibrage` | liste les références à recalibrer |
 
@@ -473,7 +476,8 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      81 tests, aucun accès réseau
+ram_service.py          service système : démarrage auto, redémarrage auto
+test_ram_sniper.py      83 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -656,3 +660,84 @@ les caractéristiques techniques sont resynchronisées.
 - **CL14 en 3200 = B-die quasi certain** — mais confirmez au part number.
 - **Ne jamais vendre comme kit assorti deux barrettes de PN différents.**
   C'est exactement ce qu'on reproche aux autres vendeurs.
+
+---
+
+## 10. Tourner en continu
+
+### Le facteur décisif : Datadome
+
+Vinted est protégé par **Datadome**, qui bloque massivement les adresses IP de
+centres de données. Le scraper fonctionne depuis une connexion résidentielle ;
+depuis un serveur cloud, il se prend des HTTP 403 en quelques minutes. Ce n'est
+pas contournable proprement — c'est exactement ce que Datadome est payé pour
+faire.
+
+**Conséquence pratique : la meilleure machine pour ce bot est celle que vous
+avez déjà**, sur votre box internet. C'est aussi la seule option réellement
+gratuite.
+
+### La solution recommandée : votre Mac, en service
+
+```bash
+venv/bin/python3 ram_service.py install
+```
+
+Le bot démarre à l'ouverture de session, redémarre tout seul s'il s'arrête, et
+survit à un reboot. `caffeinate` empêche la mise en veille tant que la machine
+est sur secteur.
+
+```bash
+venv/bin/python3 ram_service.py status     # tourne-t-il ? workers vivants ?
+venv/bin/python3 ram_service.py logs       # 50 dernières lignes
+venv/bin/python3 ram_service.py restart
+venv/bin/python3 ram_service.py uninstall
+```
+
+Deux points d'attention :
+
+- **Sur batterie**, macOS finit par s'endormir malgré `caffeinate -s` et le
+  scan s'interrompt. Laissez le Mac branché.
+- **Projet sur un disque externe** (`/Volumes/Data3`) : si le disque n'est pas
+  monté au démarrage, le service tourne à vide. `ram_service.py install` le
+  signale. Pour une surveillance vraiment continue, déplacez le projet sur le
+  disque interne.
+
+### Les autres options, honnêtement
+
+| Solution | Gratuit | Marche avec Vinted ? |
+|---|---|---|
+| **Votre Mac en service** | ✅ | ✅ IP résidentielle |
+| **Raspberry Pi chez vous** | ~50 € une fois | ✅ IP résidentielle, 2 W |
+| **Vieux PC/portable sous Linux** | ✅ | ✅ IP résidentielle |
+| Android + Termux | ✅ | ⚠️ IP mobile souvent bloquée, Android tue les tâches de fond |
+| iPhone | — | ❌ impossible, iOS n'exécute pas de tâche de fond durable |
+| Oracle Cloud Always Free | ✅ (carte requise) | ❌ IP datacenter → 403 |
+| Google Cloud e2-micro | ✅ (carte requise) | ❌ IP datacenter → 403 |
+| PythonAnywhere gratuit | ✅ | ❌ Vinted hors de la liste blanche |
+| Render / Railway | ❌ plus de vrai palier gratuit pour un worker | ❌ |
+| GitHub Actions (cron) | ✅ | ❌ IP datacenter, et 5 min minimum entre deux runs |
+
+**Le meilleur rapport effort/résultat si vous voulez éteindre le Mac** : un
+Raspberry Pi 4 ou 5 branché sur votre box. Même IP résidentielle, 2 watts,
+allumé en permanence. Le module tourne dessus sans modification —
+`ram_service.py install` y installe une unité systemd.
+
+### Recevoir les alertes sur le téléphone
+
+C'est déjà le cas : **Telegram**. Le bot tourne sur une machine fixe, les
+notifications arrivent sur votre téléphone où que vous soyez, et les boutons
+fonctionnent depuis l'application mobile. Faire tourner le scraper *sur* le
+téléphone n'apporterait rien de plus.
+
+Pour consulter le dashboard depuis le téléphone sur le même réseau Wi-Fi,
+lancez-le en écoutant sur toutes les interfaces :
+
+```bash
+venv/bin/python3 ram_sniper.py --dashboard --port=8010
+```
+
+puis, dans le navigateur du téléphone, `http://<IP-du-Mac>:8010/ram`
+(l'IP se lit dans Réglages → Wi-Fi). Par défaut le dashboard n'écoute que sur
+`127.0.0.1` : c'est volontaire, il n'a aucune authentification et ne doit
+jamais être exposé au-delà de votre réseau local.

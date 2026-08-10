@@ -1044,6 +1044,35 @@ def _():
     ram_sniper._file_notif.clear()
 
 
+@test("service : plist macOS et unité systemd valides")
+def _():
+    import xml.dom.minidom
+    import ram_service
+
+    plist = ram_service._plist_contenu()
+    xml.dom.minidom.parseString(plist)          # lève si le XML est cassé
+    for cle in ("KeepAlive", "RunAtLoad", "ThrottleInterval"):
+        assert cle in plist, f"{cle} absent : le service ne redémarrerait pas"
+    assert "caffeinate" in plist, "sans caffeinate, un Mac endormi ne scanne rien"
+
+    unite = ram_service._unite_contenu()
+    assert "Restart=always" in unite
+    assert "ram_sniper.py" in unite
+
+
+@test("service : prérequis vérifiés avant installation")
+def _():
+    import ram_service
+    problemes = ram_service.verifier_prerequis()
+    # Sans .env, l'installation doit être refusée plutôt que de créer un
+    # service qui redémarrerait en boucle sans jamais rien envoyer.
+    bloquants = [p for p in problemes if not p.startswith("ℹ️")]
+    assert isinstance(problemes, list)
+    if not os.path.exists(os.path.join(ram_service.BASE_DIR, ".env")):
+        assert any(".env" in p for p in bloquants), \
+            "un .env manquant doit bloquer l'installation"
+
+
 @test("une option inconnue est refusée, jamais ignorée en silence")
 def _():
     import ram_sniper
