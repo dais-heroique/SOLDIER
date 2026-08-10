@@ -361,7 +361,11 @@ class GeminiProvider(VisionProvider):
             raise VisionError(f"HTTP {e.code} : {detail}")
         except urllib.error.URLError as e:
             raise VisionError(f"réseau : {e.reason}")
-        except (ValueError, TypeError) as e:
+        except TimeoutError as e:
+            # Même piège que côté Telegram : urlopen lève TimeoutError, qui
+            # n'est pas un URLError. Non capturé, il remonterait jusqu'au worker.
+            raise VisionError(f"délai dépassé après {self.timeout}s : {e}")
+        except (ValueError, TypeError, OSError) as e:
             raise VisionError(f"réponse illisible : {e}")
 
         latence = int((time.time() - debut) * 1000)

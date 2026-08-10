@@ -33,3 +33,4 @@ desktop.ini
 # Verrou d'instance RAM SNIPER
 .ram_sniper.lock
 ram_config.local.yaml
+.ram_sante.json

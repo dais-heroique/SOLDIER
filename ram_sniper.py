@@ -175,15 +175,59 @@ def worker_scraping(cfg, une_seule_fois=False):
 
 
 # ─────────────────────── WORKER NOTIFICATION ───────────────────────
+def recharger_file_notification(cfg, heures=3):
+    """Reconstruit la file d'attente depuis la base.
+
+    La file vit en mémoire : sans cette reconstruction, une annonce était
+    définitivement perdue dès qu'un envoi échouait ou que le worker redémarrait.
+    La base, elle, sait exactement ce qui reste à faire — toute annonce encore
+    en statut « nouveau » au-dessus du seuil n'a jamais été notifiée.
+
+    Bornée à quelques heures : au-delà, l'annonce n'est plus une opportunité,
+    la notifier ne ferait que du bruit.
+    """
+    seuil = float(cfg.val("scoring.seuil_notification", 55))
+    with ram_db.get_db() as conn:
+        lignes = conn.execute("""
+            SELECT id, pre_score FROM ram_annonce
+            WHERE statut = 'nouveau' AND exclusion IS NULL
+              AND pre_score >= ? AND detecte_le > ? AND encore_en_ligne = 1
+              AND id NOT IN (SELECT annonce_id FROM ram_notification
+                             WHERE annonce_id IS NOT NULL)
+            ORDER BY pre_score DESC LIMIT 200
+        """, (seuil, time.time() - heures * 3600)).fetchall()
+
+    ajoutees = 0
+    with _verrou_notif:
+        deja = {e[1] for e in _file_notif}
+        for ligne in lignes:
+            if ligne["id"] in deja:
+                continue
+            heapq.heappush(_file_notif, (-(ligne["pre_score"] or 0), ligne["id"],
+                                         time.time()))
+            ajoutees += 1
+    return ajoutees
+
+
 def worker_notification(cfg):
-    """Envoie les notifications de l'étape 1, une par `anti_spam_s` au plus,
-    toujours la mieux notée d'abord."""
+    """Envoie les notifications de l'étape 1, la mieux notée d'abord."""
     log("INFO", "worker notification démarré",
         anti_spam_s=cfg.val("telegram.anti_spam_s", 60),
+        rafale_max=cfg.val("telegram.rafale_max", 4),
         notif_mode=cfg.notif_mode, dry_run=cfg.dry_run)
+
+    reprises = recharger_file_notification(cfg)
+    if reprises:
+        log("INFO", "annonces en attente reprises depuis la base", n=reprises)
+    derniere_reprise = time.time()
 
     while not ARRET.is_set():
         cfg = ram_config.get()
+
+        # Filet périodique : rattrape ce qu'un envoi en échec aurait perdu.
+        if time.time() - derniere_reprise > 300:
+            derniere_reprise = time.time()
+            recharger_file_notification(cfg)
         if not ram_telegram.anti_spam_ok(cfg):
             ARRET.wait(2)
             continue
@@ -212,7 +256,10 @@ def worker_notification(cfg):
                 url=annonce.get("url"))
         except ram_telegram.TelegramError as e:
             STATS["erreurs"] += 1
-            log("ERROR", "notification en échec", annonce=annonce_id, erreur=str(e))
+            # L'annonce reste en statut « nouveau » : la reprise périodique la
+            # remettra en file. Un échec d'envoi ne fait pas perdre l'affaire.
+            log("ERROR", "notification en échec — sera retentée", annonce=annonce_id,
+                erreur=str(e))
 
 
 # ─────────────────────── WORKER VISION ───────────────────────
@@ -356,6 +403,7 @@ def worker_planificateur(cfg):
             except Exception as e:
                 log("WARN", "purge en échec", erreur=str(e))
 
+        _ecrire_sante()          # battement régulier : prouve que le bot tourne
         ARRET.wait(30)
 
 
@@ -398,6 +446,7 @@ def etat(cfg=None):
         "actif": not ARRET.is_set(),
         "uptime_s": round(time.time() - STATS["demarre_le"], 1),
         "stats": dict(STATS),
+        "workers": dict(SANTE),
         "file_notification": file_notif,
         "vision": ram_vision.etat_quota(cfg),
         "sources": ram_scrapers.etat_sources(cfg),
@@ -432,10 +481,68 @@ def demarrer(cfg=None, une_seule_fois=False, avec_callbacks=True):
             cibles.append(("callbacks", lambda c: ram_telegram.boucle_callbacks(cfg=c), (cfg,)))
 
     for nom, cible, args in cibles:
-        t = threading.Thread(target=cible, args=args, name=f"ram-{nom}", daemon=True)
+        t = threading.Thread(target=_superviser, args=(nom, cible, args),
+                             name=f"ram-{nom}", daemon=True)
         t.start()
         threads.append(t)
     return threads
+
+
+# Santé des workers, pour --etat et le dashboard.
+SANTE = {}
+SANTE_FICHIER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             ".ram_sante.json")
+
+
+def _ecrire_sante():
+    """Publie l'état des workers dans un fichier que le dashboard peut lire.
+
+    Le dashboard tourne dans un AUTRE processus : sans ce fichier, il n'a aucun
+    moyen de savoir qu'un worker est tombé. C'est précisément l'information qui
+    manquait quand les notifications se sont arrêtées sans que rien ne le signale.
+    """
+    try:
+        with open(SANTE_FICHIER, "w", encoding="utf-8") as f:
+            json.dump({"maj_le": time.time(), "pid": os.getpid(),
+                       "workers": SANTE, "stats": STATS}, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _superviser(nom, cible, args):
+    """Relance un worker qui s'arrête sur une exception non prévue.
+
+    Sans ça, une seule erreur imprévue — un délai réseau dépassé au mauvais
+    moment, une réponse malformée — tuait le thread DÉFINITIVEMENT et en
+    silence. Le worker de scraping, lui, continuait à tourner : les logs
+    défilaient normalement pendant que plus aucune notification ne partait.
+    Rien dans le terminal ne permettait de s'en rendre compte.
+
+    Le worker vision et le planificateur peuvent se terminer normalement
+    (vision désactivée, --once) : une sortie propre n'est pas un incident.
+    """
+    import traceback
+    redemarrages = 0
+    while not ARRET.is_set():
+        SANTE[nom] = {"etat": "actif", "depuis": time.time(), "redemarrages": redemarrages}
+        _ecrire_sante()
+        try:
+            cible(*args)
+            SANTE[nom] = {"etat": "termine", "depuis": time.time(),
+                          "redemarrages": redemarrages}
+            _ecrire_sante()
+            return
+        except Exception as e:
+            redemarrages += 1
+            STATS["erreurs"] += 1
+            SANTE[nom] = {"etat": "redemarrage", "depuis": time.time(),
+                          "redemarrages": redemarrages, "derniere_erreur": str(e)}
+            _ecrire_sante()
+            log("ERROR", f"worker {nom} interrompu — redémarrage", erreur=str(e),
+                type=type(e).__name__, redemarrages=redemarrages,
+                trace=traceback.format_exc(limit=4))
+            if ARRET.wait(min(5 * redemarrages, 60)):
+                return
 
 
 # Options reconnues. Une option inconnue doit ARRÊTER le programme : sur une

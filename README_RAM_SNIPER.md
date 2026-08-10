@@ -45,7 +45,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 78 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 81 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -473,7 +473,7 @@ ram_scrapers.py         Vinted + Leboncoin, backoff, quarantaine, replay
 ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
-test_ram_sniper.py      78 tests, aucun accès réseau
+test_ram_sniper.py      81 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -598,6 +598,19 @@ git checkout -- ram_config.yaml
 git pull origin main
 venv/bin/python3 ram_setup.py        # réécrit dans ram_config.local.yaml
 ```
+
+**Une alerte, puis plus rien du tout**
+Un worker était tombé. Regardez la pastille en haut du dashboard : « bot actif »,
+« bot arrêté » ou « N incident(s) ». En détail :
+
+```bash
+venv/bin/python3 ram_sniper.py --etat | grep -A20 workers
+```
+
+Depuis la version courante, un worker qui s'arrête sur une erreur imprévue est
+relancé automatiquement et l'incident est journalisé (`worker X interrompu —
+redémarrage`). La file de notification est reconstruite depuis la base, donc
+aucune annonce n'est perdue au passage.
 
 **Une seule alerte alors que plusieurs affaires sont sorties**
 Réglez `telegram.rafale_max` (4 par défaut) : c'est le nombre de notifications

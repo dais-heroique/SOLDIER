@@ -25,6 +25,8 @@ autre processus.
 """
 
 import json
+import os
+import time
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -223,10 +225,37 @@ def api_listing(stock_id):
         return jsonify({"error": str(e)}), 404
 
 
+def _sante_workers():
+    """État des workers, publié par ram_sniper.py dans un fichier.
+
+    Le bot et le dashboard sont deux processus distincts : ce fichier est le
+    seul lien. Sans lui, un worker mort restait totalement invisible.
+    """
+    chemin = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ram_sante.json")
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            sante = json.load(f)
+    except (OSError, ValueError):
+        return {"bot_en_marche": False, "motif": "aucun ram_sniper.py détecté"}
+
+    age = time.time() - float(sante.get("maj_le") or 0)
+    # Le battement est écrit toutes les 30 s : au-delà de 2 minutes, le bot
+    # est arrêté ou bloqué.
+    sante["bot_en_marche"] = age < 120
+    sante["battement_age_s"] = round(age, 1)
+    if not sante["bot_en_marche"]:
+        sante["motif"] = f"dernier signe de vie il y a {int(age)} s"
+    incidents = {n: w for n, w in (sante.get("workers") or {}).items()
+                 if w.get("redemarrages")}
+    sante["incidents"] = incidents
+    return sante
+
+
 @bp.route("/api/etat")
 def api_etat():
     cfg = ram_config.get()
     return jsonify({
+        "sante": _sante_workers(),
         "sources": ram_scrapers.etat_sources(cfg),
         "vision": ram_vision.etat_quota(cfg),
         "base": ram_db.stats_base(),
@@ -326,6 +355,7 @@ PAGE = r"""<!DOCTYPE html>
   <span class="pastille" id="p-vision">…</span>
   <span class="pastille" id="p-sources">…</span>
   <span class="pastille" id="p-refs">…</span>
+  <span class="pastille" id="p-bot">…</span>
   <span class="pastille" id="p-maj" style="margin-left:auto">…</span>
 </header>
 <nav>
@@ -461,6 +491,16 @@ async function entete() {
     if (e.secrets_manquants.length) {
       $("#p-refs").textContent += " · ⚠️ " + e.secrets_manquants.join(", ");
       $("#p-refs").className = "pastille warn";
+    }
+    const s = e.sante || {};
+    if (s.bot_en_marche) {
+      const inc = Object.keys(s.incidents || {}).length;
+      $("#p-bot").textContent = inc ? `bot actif · ${inc} incident(s)` : "bot actif";
+      $("#p-bot").className = "pastille " + (inc ? "warn" : "ok");
+    } else {
+      $("#p-bot").textContent = "⏹ bot arrêté";
+      $("#p-bot").className = "pastille ko";
+      $("#p-bot").title = s.motif || "";
     }
     $("#p-maj").textContent = new Date().toLocaleTimeString("fr-FR");
   } catch (e) { $("#p-maj").textContent = "hors ligne"; }

@@ -57,6 +57,17 @@ def _appel(methode, charge, token=None, timeout=15):
         raise TelegramError(f"HTTP {e.code} sur {methode} : {detail}")
     except urllib.error.URLError as e:
         raise TelegramError(f"réseau : {e.reason}")
+    except TimeoutError as e:
+        # urlopen(timeout=…) lève TimeoutError, PAS URLError. Sans ce cas,
+        # un unique délai dépassé remontait jusqu'au worker de notification,
+        # qui n'attrape que TelegramError : le thread mourait en silence et
+        # plus aucune alerte ne partait, alors que le scan continuait à tourner.
+        raise TelegramError(f"délai dépassé après {timeout}s sur {methode} : {e}")
+    except (ValueError, OSError) as e:
+        # Réponse non-JSON (page d'erreur d'un proxy), connexion coupée…
+        raise TelegramError(f"réponse illisible sur {methode} : {e}")
+    if not isinstance(reponse, dict):
+        raise TelegramError(f"{methode} : réponse inattendue")
     if not reponse.get("ok"):
         raise TelegramError(f"{methode} : {reponse.get('description')}")
     return reponse.get("result")

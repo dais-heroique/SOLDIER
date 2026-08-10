@@ -964,6 +964,86 @@ def _():
     assert candidats and candidats[0]["occurrences"] == 2
 
 
+@test("un délai réseau Telegram ne s'échappe pas en TimeoutError")
+def _():
+    # urlopen(timeout=…) lève TimeoutError, qui n'est PAS un URLError. Non
+    # capturé, il remontait jusqu'au worker de notification — qui n'attrape que
+    # TelegramError — et tuait le thread : une seule alerte, puis plus rien,
+    # pendant que le scan continuait de tourner normalement.
+    import urllib.request
+    vrai = urllib.request.urlopen
+    urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(TimeoutError("timed out"))
+    try:
+        try:
+            ram_telegram._appel("sendMessage", {"chat_id": "x", "text": "y"},
+                                token="1234567890:" + "a" * 35)
+            raise AssertionError("aucune exception levée")
+        except ram_telegram.TelegramError:
+            pass
+        except TimeoutError:
+            raise AssertionError("TimeoutError s'échappe encore et tuera le worker")
+    finally:
+        urllib.request.urlopen = vrai
+
+
+@test("un worker qui plante redémarre au lieu de mourir")
+def _():
+    import threading as _th
+    import time as _t
+    import ram_sniper
+    appels = {"n": 0}
+
+    def worker_capricieux(_cfg):
+        appels["n"] += 1
+        if appels["n"] == 1:
+            raise RuntimeError("panne simulée")
+        _t.sleep(0.05)
+
+    ram_sniper.ARRET.clear()
+    t = _th.Thread(target=ram_sniper._superviser,
+                   args=("test_sante", worker_capricieux, (None,)), daemon=True)
+    t.start()
+    _t.sleep(0.3)
+    ram_sniper.ARRET.set()
+    t.join(timeout=3)
+    ram_sniper.ARRET.clear()
+    assert appels["n"] >= 1
+    sante = ram_sniper.SANTE.get("test_sante", {})
+    assert sante.get("redemarrages", 0) >= 1, "le plantage n'a pas été enregistré"
+
+
+@test("file de notification reconstruite depuis la base")
+def _():
+    import ram_sniper
+    import time as _t
+    cfg = ram_config.get()
+    ram_sniper._file_notif.clear()
+    with ram_db.get_db() as conn:
+        conn.execute("DELETE FROM ram_notification")
+
+    for i, prix in enumerate((45, 40, 50)):
+        ram_scrapers.traiter_annonce({
+            "url": f"https://vinted.fr/durable/{i}",
+            "titre": "Kit DDR4 32Go Corsair Vengeance LPX 3200",
+            "description": "CMK32GX4M2E3200C16 2x16", "prix": prix,
+            "photos": ["a.jpg"], "publie_le": _t.time() - 600}, "vinted", "ddr4")
+
+    n = ram_sniper.recharger_file_notification(cfg)
+    assert n >= 1, "une annonce notifiable non envoyée doit pouvoir être reprise"
+    assert ram_sniper.recharger_file_notification(cfg) == 0, \
+        "la reprise ne doit pas créer de doublons"
+
+    # Une annonce déjà notifiée ne doit jamais repartir
+    annonce_id = ram_sniper._file_notif[0][1]
+    ram_db.enregistrer_notification({"annonce_id": annonce_id, "chat_id": "x",
+                                     "type": "annonce", "etat": "non_verifie",
+                                     "mode": "edit"})
+    ram_sniper._file_notif.clear()
+    reste = ram_sniper.recharger_file_notification(cfg)
+    assert reste == n - 1, f"{reste} reprises au lieu de {n - 1}"
+    ram_sniper._file_notif.clear()
+
+
 @test("une option inconnue est refusée, jamais ignorée en silence")
 def _():
     import ram_sniper
