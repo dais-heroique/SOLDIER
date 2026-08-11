@@ -46,7 +46,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 88 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 90 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -477,7 +477,7 @@ ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
 ram_service.py          service système : démarrage auto, redémarrage auto
-test_ram_sniper.py      88 tests, aucun accès réseau
+test_ram_sniper.py      90 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -641,6 +641,23 @@ perimetre:
 
 Sachez alors que la valorisation ne porte que sur la RAM — il faut démonter et
 écouler le reste.
+
+**Le bot rejette une annonce qui me paraît bonne**
+Regardez le motif dans le dashboard ou `--diag`. Un rejet `marge` est
+généralement juste : le bot compare au **prix total** (affiché + port +
+protection), pas au prix affiché. 50 € pour un 2×8 Go qui se revend 60 € ne
+laisse rien une fois les 6,70 € de frais Vinted ajoutés.
+
+Pour recevoir plus d'annonces, ouvrez le robinet dans `ram_config.local.yaml` :
+
+```yaml
+scoring:
+  seuil_notification: 45     # au lieu de 55
+  marge_min_eur: 12          # au lieu de 20
+  marge_min_pct: 25          # au lieu de 45
+```
+
+Rechargé à chaud, pas besoin de redémarrer.
 
 **Trop de notifications**
 Montez `scoring.seuil_notification` à 70-75, ou `scoring.marge_min_eur`.

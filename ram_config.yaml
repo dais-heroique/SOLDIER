@@ -127,7 +127,18 @@ perimetre:
       - ddr 5
 
   # Signaux d'une DDR3 vendue (par erreur ou non) comme DDR4 — piège n°1.
+  # Ce sont des PRÉSOMPTIONS, pas des preuves : « Vengeance Pro » désigne une
+  # gamme DDR3, mais c'est aussi ainsi que beaucoup écrivent « Vengeance RGB
+  # Pro », qui est de la DDR4.
+  #   degrader (défaut) : l'annonce reste visible avec un avertissement et une
+  #     pénalité de score, si elle écrit explicitement « DDR4 » et que le seul
+  #     indice est un nom de gamme. Mieux vaut trop d'annonces que pas assez.
+  #   rejeter : comportement strict, toute présomption élimine l'annonce.
+  # Une fréquence sous 2133 MHz ou une plateforme DDR3 citée (LGA1150, Z97…)
+  # restent des rejets dans les deux modes : ce sont des indices forts.
   pieges_ddr3:
+    mode: degrader
+    penalite_score: 20
     plateformes:
       - i5-3570
       - i7-3770

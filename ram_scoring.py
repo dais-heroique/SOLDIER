@@ -395,6 +395,15 @@ def pre_score(annonce, analyse, cfg=None):
     if confiance < 0.5:
         score = min(score, 72.0)
 
+    # Présomption de DDR3 non levée : l'annonce reste visible mais recule dans
+    # la file. C'est le compromis choisi — signaler plutôt qu'éliminer, quitte
+    # à ce que l'utilisateur tranche sur les photos.
+    suspicions = analyse.get("suspicions_ddr3") or []
+    if suspicions:
+        penalite = float(cfg.val("perimetre.pieges_ddr3.penalite_score", 20))
+        score -= penalite
+        resultat.setdefault("drapeaux", []).extend(suspicions)
+
     points_age, note_age = ajustement_fraicheur(annonce, cfg)
     score += points_age
     if note_age:

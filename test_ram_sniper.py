@@ -180,15 +180,45 @@ def _():
     assert analyse("RAM DDR5 32Go 6000")["exclusion"] == "ddr5"
 
 
-@test("DDR3 déguisée en DDR4 détectée (fréquence, plateforme, modèle)")
+@test("DDR3 déguisée : les indices FORTS rejettent")
 def _():
-    cas = ["DDR4 16Go 1600MHz",
-           "RAM DDR4 8Go pour i7-4790 LGA1150",
-           "Corsair Vengeance Pro 16Go DDR4",
-           "HyperX Fury 1600 8Go DDR4"]
-    for t in cas:
+    # Fréquence sous 2133 et plateforme DDR3 citée sont des preuves quasi
+    # certaines : on rejette même si l'annonce écrit « DDR4 ».
+    for t in ["DDR4 16Go 1600MHz",
+              "RAM DDR4 8Go pour i7-4790 LGA1150",
+              "HyperX Fury 1600 8Go DDR4",
+              "Corsair Vengeance Pro 16Go 1866mhz z87"]:
         r = analyse(t)
         assert r["exclusion"] == "ddr3_suspecte", f"« {t} » non détectée ({r['exclusion']})"
+
+
+@test("DDR3 déguisée : un nom de gamme seul dégrade, il ne rejette pas")
+def _():
+    # « Vengeance Pro » désigne une gamme DDR3 (CMY), mais c'est aussi ainsi
+    # que beaucoup écrivent « Vengeance RGB Pro », qui est de la DDR4. Rejeter
+    # sur ce seul mot faisait perdre de vraies affaires.
+    r = analyse("Ram Corsair vengeance PRO 16g",
+                "Ram DDR4 2x8g Corsair vengeance Pro 16giga")
+    assert r["exclusion"] != "ddr3_suspecte", \
+        "annonce disant explicitement DDR4 rejetée sur un nom de gamme"
+    assert r["suspicions_ddr3"], "la présomption doit rester signalée"
+    assert any("vengeance pro" in d.lower() for d in r["drapeaux"])
+
+    # Sans mention DDR4, le doute profite à la prudence.
+    sans_ddr4 = analyse("Corsair Vengeance Pro 16Go")
+    assert sans_ddr4["exclusion"] == "ddr3_suspecte"
+
+
+@test("unités de capacité : 2x8g, 16giga, 16g")
+def _():
+    # « DDR4 2x8g » n'était pas reconnu comme un kit : l'annonce se faisait
+    # valoriser comme une barrette unique de 16 Go, soit le double de sa valeur.
+    r = analyse("Ram Corsair vengeance PRO 16g",
+                "Ram DDR4 2x8g Corsair vengeance Pro 16giga")
+    assert (r["nb_modules"], r["capacite_module_go"]) == (2, 8), \
+        f"lu {r['nb_modules']}×{r['capacite_module_go']} au lieu de 2×8"
+    assert analyse("Barrette DDR4 16giga 3200")["capacite_module_go"] == 16
+    assert analyse("RAM DDR4 8g 2666")["capacite_module_go"] == 8
 
 
 @test("4 Go rejetée, sauf lot de 10+")

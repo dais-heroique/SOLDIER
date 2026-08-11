@@ -61,7 +61,8 @@ DEFAUTS = {
         "accepter_pc_complets": False,
         "exception_4go": {"actif": True, "nb_min": 10, "prix_max_unitaire": 1.50},
         "exclusions": {"sodimm": [], "ecc": [], "generation": []},
-        "pieges_ddr3": {"plateformes": [], "modeles": []},
+        "pieges_ddr3": {"mode": "degrader", "penalite_score": 20,
+                        "plateformes": [], "modeles": []},
     },
     "multiplicateurs": {
         "kit_assorti_origine": 1.25, "rgb": 1.20, "couleur_blanche": 1.15,

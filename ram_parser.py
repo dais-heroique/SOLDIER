@@ -162,10 +162,19 @@ SODIMM_MOTIFS = [
 ]
 
 # ─────────────────────── SPECS ───────────────────────
-# Capacité : "2x16 go", "2 x 16go", "32 go (2x16)", "16gb"
-RE_KIT = re.compile(r"(?<![a-z0-9])([1-8])\s*[x*]\s*(4|8|16|32)\s*(?:g[ob]|go|gb)?(?![a-z0-9])", re.I)
+# Unités de capacité telles qu'elles s'écrivent VRAIMENT dans les annonces :
+# « 16go », « 16 Go », « 16gb », « 16g », « 16giga », « 16 gigas ».
+# Le « g » seul et « giga » sont fréquents et étaient ignorés : « DDR4 2x8g »
+# n'était pas reconnu comme un kit, et l'annonce se faisait valoriser comme une
+# barrette unique de 16 Go.
+_UNITE_GO = r"(?:g[ob]|gigas?|g)\b"
+
+# Capacité : "2x16 go", "2 x 16go", "2x8g", "32 go (2x16)"
+RE_KIT = re.compile(r"(?<![a-z0-9])([1-8])\s*[x*]\s*(4|8|16|32)\s*(?:" + _UNITE_GO + r")?"
+                    r"(?![a-z0-9])", re.I)
 # Forme inversée, courante sur les lots : "4go x12", "8 go * 4"
-RE_KIT_INVERSE = re.compile(r"(?<![a-z0-9])(4|8|16|32)\s*(?:go|gb)\s*[x*]\s*(\d{1,2})(?![a-z0-9])", re.I)
+RE_KIT_INVERSE = re.compile(r"(?<![a-z0-9])(4|8|16|32)\s*" + _UNITE_GO +
+                            r"\s*[x*]\s*(\d{1,2})(?![a-z0-9])", re.I)
 # Quantité annoncée en toutes lettres : "lot de 12", "12 barrettes"
 RE_QUANTITE = re.compile(r"\b(?:lot de|ensemble de|paquet de)\s*(\d{1,2})\b|"
                          r"\b(\d{1,2})\s*barrettes\b", re.I)
@@ -176,7 +185,7 @@ RE_UNITAIRE = re.compile(
     r"\b(?:une?\s+seule?\s+barrette|1\s*seule?\s+barrette|barrette\s+seule|"
     r"une?\s+barrette\s+(?:du|de\s+la|sur)\b|a\s+l\s*unite|vendue?\s+seule|"
     r"1\s*barrette|une\s+seule)\b", re.I)
-RE_CAPACITE = re.compile(r"(?<![a-z0-9])(4|8|16|32|64|128)\s*(?:go|gb|g\b)", re.I)
+RE_CAPACITE = re.compile(r"(?<![a-z0-9])(4|8|16|32|64|128)\s*" + _UNITE_GO, re.I)
 RE_FREQUENCE = re.compile(r"(?<![a-z0-9])(1333|1600|1866|2133|2400|2666|2800|2933|3000|3066|"
                           r"3200|3333|3466|3600|3733|3800|4000|4133|4266|4400|4600|4800)"
                           r"\s*(?:mhz|mt/s)?(?![a-z0-9])", re.I)
@@ -548,18 +557,37 @@ def detecter_exclusions(texte, texte_norm, specs, cfg=None):
             return gen, f"génération hors périmètre : « {terme} »"
 
     # ── DDR3 déguisée en DDR4 : le piège n°1 sur Vinted ──
+    # Ces signaux sont des PRÉSOMPTIONS, pas des preuves. « Vengeance Pro »
+    # désigne une gamme DDR3 (CMY) mais c'est aussi ainsi que beaucoup de
+    # vendeurs écrivent « Vengeance RGB Pro », qui est de la DDR4. Rejeter sur
+    # ce seul mot fait perdre de vraies affaires : une annonce qui écrit
+    # noir sur blanc « DDR4 » mérite d'être signalée, pas éliminée.
     pieges = perim.get("pieges_ddr3", {}) or {}
+    mode = str(pieges.get("mode", "degrader")).lower()
+    ddr4_explicite = bool(re.search(r"\bddr\s*4\b", texte_norm))
+
+    suspicions = []
     freq = specs.get("frequence_mhz")
     freq_min = int(perim.get("frequence_min", 2133))
     if freq and freq < freq_min:
-        return "ddr3_suspecte", (f"fréquence {freq} MHz < {freq_min} : DDR3 quasi certaine "
-                                 f"malgré la mention DDR4")
+        suspicions.append((f"fréquence {freq} MHz < {freq_min} : DDR3 très probable", 2))
     for terme in pieges.get("plateformes", []):
         if contient_terme(texte_norm, terme):
-            return "ddr3_suspecte", f"plateforme DDR3 mentionnée : « {terme} »"
+            suspicions.append((f"plateforme DDR3 mentionnée : « {terme} »", 2))
+            break
     for terme in pieges.get("modeles", []):
         if contient_terme(texte_norm, terme):
-            return "ddr3_suspecte", f"modèle connu en DDR3 : « {terme} »"
+            suspicions.append((f"gamme aussi connue en DDR3 : « {terme} »", 1))
+            break
+
+    if suspicions:
+        specs["suspicions_ddr3"] = [s for s, _ in suspicions]
+        gravite = max(poids for _, poids in suspicions)
+        # Un seul indice faible + « DDR4 » écrit dans l'annonce : on garde et on
+        # signale. Sinon (indice fort, ou aucune mention de DDR4) : on rejette.
+        rejeter = (mode == "rejeter") or not ddr4_explicite or gravite >= 2
+        if rejeter:
+            return "ddr3_suspecte", suspicions[0][0]
 
     # ── Capacité ──
     cap = specs.get("capacite_module_go")
@@ -721,6 +749,8 @@ def analyser(titre, description="", nb_photos=0, cfg=None):
         drapeaux.append("fréquence non annoncée — estimation prudente au prix plancher")
     if specs.get("incoherence_capacite"):
         drapeaux.append(f"capacité incohérente : {specs['incoherence_capacite']}")
+    for suspicion in specs.get("suspicions_ddr3", []):
+        drapeaux.append(f"⚠️ {suspicion} — vérifier l'encoche sur la photo")
     if marque in NO_NAME:
         drapeaux.append(f"marque no-name ({marque}) : revente difficile, XMP souvent instable")
     if any(contient_terme(texte_norm, t) for t in HS_TERMES):
@@ -745,6 +775,7 @@ def analyser(titre, description="", nb_photos=0, cfg=None):
         "cas_latency": specs.get("cas_latency"),
         "rank": specs.get("rank"),
         "est_kit": specs.get("est_kit", False),
+        "suspicions_ddr3": specs.get("suspicions_ddr3", []),
         "type_produit": type_produit,
         "points_produit": points_produit,
         "indices_produit": indices_produit,
