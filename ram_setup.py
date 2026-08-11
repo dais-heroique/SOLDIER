@@ -43,6 +43,10 @@ except Exception:
 
 API = "https://api.telegram.org/bot{token}/{methode}"
 
+# Renseigné après validation du token : sert à afficher la bonne commande
+# « /start@monbot » quand la configuration vise un groupe.
+_bot_username = None
+
 
 # ─────────────────────── AFFICHAGE ───────────────────────
 def titre(texte):
@@ -149,8 +153,11 @@ def attendre_chat_id(token, tentatives=30, intervalle=2.0):
     n'existe : un bot ne peut pas écrire le premier. D'où cette attente.
     """
     print()
-    info("Ouvre Telegram et envoie n'importe quel message à ton bot")
-    info("(pour recevoir à deux : crée un groupe, ajoute le bot, écris dedans)")
+    info("Ouvre Telegram et écris au bot :")
+    info("  • chat privé  → n'importe quel message")
+    info(f"  • GROUPE      → écris « /start@{_bot_username or 'tonbot'} »")
+    info("    Un bot en groupe ne reçoit par défaut QUE les messages qui le")
+    info("    mentionnent : un simple « test » resterait invisible pour lui.")
     print()
     for i in range(tentatives):
         try:
@@ -268,6 +275,13 @@ def main():
     print("\033[1m╚══════════════════════════════════════════════════════════╝\033[0m")
 
     env = lire_env()
+    if os.path.exists(os.path.join(BASE_DIR, ".ram_sniper.lock")):
+        ko("Un RAM SNIPER tourne déjà.")
+        info("Il consomme les messages Telegram au fur et à mesure : ce script")
+        info("ne verrait jamais le tien et ne pourrait pas trouver le chat ID.")
+        info("Arrête-le (Ctrl+C dans son terminal) puis relance ce script.")
+        if not oui_non("Continuer quand même ?", False):
+            return 1
     nettoyer_ancienne_modif()
 
     # ── 1. Token ──
@@ -296,7 +310,9 @@ def main():
         ko(f"Token refusé par Telegram : {e}")
         info("Si c'est « Unauthorized », le token est faux ou le bot a été supprimé.")
         return 1
-    ok(f"Bot reconnu : @{bot.get('username')} ({bot.get('first_name')})")
+    global _bot_username
+    _bot_username = bot.get("username")
+    ok(f"Bot reconnu : @{_bot_username} ({bot.get('first_name')})")
 
     # ── 2. Chat ID ──
     titre("2/4 · Chat ID (là où tu recevras les alertes)")
