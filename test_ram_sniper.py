@@ -907,6 +907,72 @@ def _():
     assert any("Archiver" in t for t in textes("rejete"))
 
 
+@test("« Ignorer » retire le message du chat")
+def _():
+    aid, _ = ram_db.upsert_annonce({
+        "source": "vinted", "url": "https://vinted.fr/suppr/1",
+        "titre": "Kit DDR4 32Go Corsair", "prix_affiche": 45, "photos": []})
+    ram_db.enregistrer_notification({
+        "annonce_id": aid, "chat_id": "123", "type": "annonce", "message_id": 4242,
+        "etat": "non_verifie", "mode": "edit",
+        "texte": "⚡ NON VÉRIFIÉ\n\n« Kit DDR4 32Go Corsair »\nPrix 45€"})
+
+    appels = []
+    ancien = ram_telegram._appel
+    ram_telegram._appel = lambda m, c, **k: appels.append((m, c)) or {}
+
+    class CfgReel:
+        dry_run = False
+        def val(self, chemin, defaut=None):
+            return ram_config.get().val(chemin, defaut)
+    try:
+        ram_telegram.traiter_callback({"data": f"ignore:{aid}"}, CfgReel())
+        assert appels and appels[0][0] == "deleteMessage", \
+            f"aucune suppression demandée : {appels}"
+        assert appels[0][1]["message_id"] == 4242
+        assert ram_db.notification_de_annonce(aid)["supprime_le"], \
+            "la suppression n'est pas tracée en base"
+    finally:
+        ram_telegram._appel = ancien
+
+
+@test("message trop vieux pour être supprimé : réduit à une ligne barrée")
+def _():
+    # Telegram interdit à un bot de supprimer ses messages au-delà de 48 h.
+    # Laisser la fiche complète noierait les affaires suivantes.
+    aid, _ = ram_db.upsert_annonce({
+        "source": "vinted", "url": "https://vinted.fr/suppr/2",
+        "titre": "RAM DDR4 16Go HyperX", "prix_affiche": 30, "photos": []})
+    ram_db.enregistrer_notification({
+        "annonce_id": aid, "chat_id": "123", "type": "annonce", "message_id": 4243,
+        "etat": "non_verifie", "mode": "edit",
+        "texte": "⚡ NON VÉRIFIÉ\n\n« RAM DDR4 16Go HyperX »\nPrix 30€"})
+
+    appels = []
+    ancien = ram_telegram._appel
+
+    def refuse_suppression(methode, charge, **k):
+        if methode == "deleteMessage":
+            raise ram_telegram.TelegramError("message can't be deleted")
+        appels.append((methode, charge))
+        return {}
+
+    ram_telegram._appel = refuse_suppression
+
+    class CfgReel:
+        dry_run = False
+        def val(self, chemin, defaut=None):
+            return ram_config.get().val(chemin, defaut)
+    try:
+        ram_telegram.traiter_callback({"data": f"ignore:{aid}"}, CfgReel())
+        assert appels and appels[0][0] == "editMessageText", \
+            f"aucun repli après refus de suppression : {appels}"
+        assert "<s>" in appels[0][1]["text"], "le repli doit barrer le titre"
+        assert "HyperX" in appels[0][1]["text"]
+    finally:
+        ram_telegram._appel = ancien
+
+
 @test("callbacks : ignorer, archiver, demander photo")
 def _():
     aid, _ = ram_db.upsert_annonce({

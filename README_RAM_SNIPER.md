@@ -46,7 +46,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 90 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 92 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -358,6 +358,24 @@ semaine.
 | 🔍 **À VÉRIFIER** | photo illisible | bouton « Demander photo sticker » |
 | ❌ **REJETÉ** | DDR3, SO-DIMM, ECC, faux sticker, dégâts | passer |
 
+### Le fil Telegram reste propre
+
+Un clic sur **❌ Ignorer** ou **🗑 Archiver** retire le message du chat. Ce qui
+reste affiché est donc ce qui reste à traiter — le fil Telegram est l'interface
+de travail, pas une archive.
+
+Telegram n'autorise un bot à supprimer ses messages que pendant **48 h**.
+Au-delà, le message est réduit à une ligne barrée (`~~Kit DDR4 32Go~~ —
+ignorée`) plutôt que supprimé. La décision reste enregistrée en base dans les
+deux cas.
+
+Pour garder tout l'historique dans le chat :
+
+```yaml
+telegram:
+  supprimer_sur_ignore: false
+```
+
 ### ⚡ COMPLÉTER KIT
 
 La notification la plus rentable du système, et la seule jamais soumise à
@@ -477,7 +495,7 @@ ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
 ram_service.py          service système : démarrage auto, redémarrage auto
-test_ram_sniper.py      90 tests, aucun accès réseau
+test_ram_sniper.py      92 tests, aucun accès réseau
 ```
 
 ### Les quatre workers

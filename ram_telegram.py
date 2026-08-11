@@ -574,6 +574,53 @@ def notifier_appariement(appariement, annonce, cfg=None):
 
 
 # ─────────────────────── BOUTONS : TRAITEMENT DES CLICS ───────────────────────
+def supprimer_message(chat_id, message_id):
+    """Retire un message du chat. Retourne True si Telegram a accepté.
+
+    Un bot ne peut supprimer ses propres messages que pendant 48 h. Au-delà,
+    l'API refuse : c'est une limite de Telegram, pas un bug.
+    """
+    try:
+        _appel("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+        return True
+    except TelegramError:
+        return False
+
+
+def retirer_du_chat(notif, cfg=None, mention="ignorée"):
+    """Fait disparaître une notification traitée.
+
+    Suppression d'abord ; si Telegram la refuse (message de plus de 48 h), on
+    replie sur une réécriture en une ligne barrée. Laisser la fiche complète
+    en place noierait les affaires suivantes sous des annonces déjà tranchées —
+    or le fil Telegram est l'interface de travail.
+    """
+    cfg = cfg or ram_config.get()
+    if not notif or not notif.get("message_id") or cfg.dry_run:
+        return False
+    if not cfg.val("telegram.supprimer_sur_ignore", True):
+        return False
+
+    chat_id, message_id = notif["chat_id"], notif["message_id"]
+    if supprimer_message(chat_id, message_id):
+        ram_db.maj_notification(notif["id"], {"supprime_le": time.time()})
+        return True
+
+    # Repli : on réduit le message à une ligne barrée. Le titre de l'annonce
+    # est la 3e ligne du message d'origine (« « … » »).
+    lignes = [l for l in (notif.get("texte") or "").splitlines() if l.strip()]
+    titre = next((l.strip("« »") for l in lignes if l.startswith("«")), "annonce")
+    try:
+        _appel("editMessageText", {
+            "chat_id": chat_id, "message_id": message_id,
+            "text": f"<s>{_echapper(titre[:60])}</s> — {mention}",
+            "parse_mode": "HTML"})
+    except TelegramError:
+        return False
+    ram_db.maj_notification(notif["id"], {"supprime_le": time.time()})
+    return True
+
+
 def traiter_callback(callback, cfg=None):
     """Traite un clic sur un bouton inline. Retourne un message de confirmation.
 
@@ -589,17 +636,18 @@ def traiter_callback(callback, cfg=None):
     except (TypeError, ValueError):
         return "action inconnue"
 
-    if action == "ignore":
+    if action in ("ignore", "archive"):
         annonce = ram_db.get_annonce(cible_id)
-        ram_db.maj_annonce(cible_id, {"statut": "ignore"})
-        ram_db.journaliser("ignore", annonce, motif="bouton Ignorer")
-        return "❌ Annonce ignorée"
-
-    if action == "archive":
-        annonce = ram_db.get_annonce(cible_id)
-        ram_db.maj_annonce(cible_id, {"statut": "archive"})
-        ram_db.journaliser("archive", annonce, motif="bouton Archiver")
-        return "🗑 Archivée"
+        statut = "ignore" if action == "ignore" else "archive"
+        ram_db.maj_annonce(cible_id, {"statut": statut})
+        ram_db.journaliser(statut, annonce,
+                           motif=f"bouton {'Ignorer' if action == 'ignore' else 'Archiver'}")
+        # La décision est prise et enregistrée : le message n'a plus rien à
+        # faire dans le fil. Ce qui reste affiché doit être ce qui reste à
+        # traiter.
+        retirer_du_chat(ram_db.notification_de_annonce(cible_id), cfg,
+                        mention="ignorée" if action == "ignore" else "archivée")
+        return "❌ Annonce ignorée" if action == "ignore" else "🗑 Archivée"
 
     if action in ("msg", "photo"):
         annonce = ram_db.get_annonce(cible_id)
@@ -609,6 +657,8 @@ def traiter_callback(callback, cfg=None):
 
     if action == "ignore_kit":
         ram_db.maj_appariement(cible_id, {"statut": "ignore"})
+        retirer_du_chat(ram_db.notification_de_appariement(cible_id), cfg,
+                        mention="appariement ignoré")
         return "❌ Appariement ignoré"
 
     return "action inconnue"

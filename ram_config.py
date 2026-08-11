@@ -79,6 +79,7 @@ DEFAUTS = {
     },
     "telegram": {
         "actif": True, "notif_mode": "edit", "anti_spam_s": 60, "rafale_max": 4, "election_leader": True,
+        "supprimer_sur_ignore": True,
         "notifier_rejets": False, "notifier_appariements": True,
         "message_demande_photo": "Bonjour, pourriez-vous m'envoyer une photo "
                                  "du sticker de la barrette ? Merci !",

@@ -34,7 +34,8 @@ SCHEMA_VERSION = 1
 # Chaque instruction est rejouable : les erreurs "duplicate column" sont
 # ignorées, comme dans soldier_db.MIGRATIONS.
 MIGRATIONS = [
-    # (2, "exemple", ["ALTER TABLE ram_annonce ADD COLUMN xxx TEXT"]),
+    (2, "trace de suppression des messages Telegram",
+     ["ALTER TABLE ram_notification ADD COLUMN supprime_le REAL"]),
 ]
 
 
@@ -775,6 +776,14 @@ def enregistrer_notification(data):
         cur = conn.execute(f"INSERT INTO ram_notification ({', '.join(cols)}) "
                            f"VALUES ({', '.join('?' * len(cols))})", [d[c] for c in cols])
         return cur.lastrowid
+
+
+def notification_de_appariement(appariement_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM ram_notification WHERE appariement_id=? "
+                           "ORDER BY envoye_le DESC LIMIT 1",
+                           (appariement_id,)).fetchone()
+        return dict(row) if row else None
 
 
 def notification_de_annonce(annonce_id, type_notif="annonce"):

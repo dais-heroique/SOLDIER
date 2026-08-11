@@ -283,6 +283,12 @@ telegram:
   # Mets false uniquement si tu VEUX que les deux machines notifient.
   election_leader: true
   # Les éditions (étape 2) ne comptent JAMAIS dans cette limite.
+  # Cliquer sur « ❌ Ignorer » ou « 🗑 Archiver » retire le message du chat :
+  # ce qui reste affiché est ce qui reste à traiter. Un bot ne peut supprimer
+  # ses messages que pendant 48 h — au-delà, le message est réduit à une ligne
+  # barrée plutôt que supprimé.
+  supprimer_sur_ignore: true
+
   notifier_rejets: false        # true = notifier aussi les ❌ REJETÉ par Gemini
   notifier_appariements: true   # ⚡ COMPLÉTER KIT : toujours prioritaire
   message_demande_photo: >-
