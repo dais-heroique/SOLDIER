@@ -27,6 +27,20 @@ se fait à la main depuis Telegram, en quelques secondes.
 
 ## 1. Installation
 
+### Windows — en une fois
+
+Télécharge `install_windows.ps1` depuis le dépôt, clic droit → **Exécuter avec
+PowerShell**. Il fait tout : nettoyage d'une installation précédente, clone,
+environnement Python, dépendances, base de références, tests et configuration
+Telegram.
+
+L'erreur la plus fréquente qu'il évite : lancer les commandes depuis
+`C:\Users\<nom>` au lieu du dossier du projet. Python répond alors
+`can't open file ... No such file or directory` pour chaque script, et un
+environnement `venv` inutile finit par traîner dans le dossier personnel.
+
+### macOS / Linux
+
 Le module vit dans le dossier SOLDIER existant et partage sa base
 (`soldier.db`). Aucune installation séparée.
 
