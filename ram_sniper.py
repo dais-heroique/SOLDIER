@@ -143,6 +143,7 @@ def worker_scraping(cfg, une_seule_fois=False):
     while not ARRET.is_set():
         cfg = ram_config.get()
         STATS["cycles"] += 1
+        cycle = {"vues": 0, "retenues": 0, "meilleur": 0.0, "meilleur_titre": None}
         for scraper in scrapers:
             if ARRET.is_set():
                 break
@@ -158,6 +159,17 @@ def worker_scraping(cfg, une_seule_fois=False):
                     STATS["annonces_vues"] += len(resultats)
                     STATS["dernier_scan"] = time.time()
                     traiter_resultats(resultats, cfg)
+                    for r in resultats:
+                        if not (r and r.get("nouvelle") and r.get("pre")):
+                            continue
+                        cycle["vues"] += 1
+                        if r["pre"].get("exclusion"):
+                            continue
+                        cycle["retenues"] += 1
+                        score = r["pre"].get("pre_score") or 0
+                        if score > cycle["meilleur"]:
+                            cycle["meilleur"] = score
+                            cycle["meilleur_titre"] = (r["annonce"].get("titre") or "")[:60]
                     if resultats:
                         log("INFO", "scan", source=scraper.source, mot_cle=mot,
                             vues=len(resultats),
@@ -168,6 +180,18 @@ def worker_scraping(cfg, une_seule_fois=False):
                         mot_cle=mot, erreur=str(e))
                 ram_scrapers._pause(
                     cfg.val(f"sources.{scraper.source}.delai_entre_requetes_s", [2.5, 5.0]))
+
+        # Bilan de fin de cycle. Sans lui, on ne voit défiler que « scan » et
+        # rien ne dit si le seuil est presque atteint ou hors d'atteinte : on
+        # règle alors les seuils à l'aveugle.
+        if cycle["vues"]:
+            seuil = float(cfg.val("scoring.seuil_notification", 55))
+            log("INFO", "bilan du cycle", nouvelles=cycle["vues"],
+                retenues=cycle["retenues"], meilleur_score=round(cycle["meilleur"], 1),
+                seuil=seuil,
+                verdict=("au moins une notification" if cycle["meilleur"] >= seuil
+                         else f"rien n'atteint {seuil:.0f} — voir --diag"),
+                meilleure_annonce=cycle["meilleur_titre"])
 
         if une_seule_fois:
             break
