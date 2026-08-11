@@ -46,7 +46,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 83 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 85 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -477,7 +477,7 @@ ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
 ram_service.py          service système : démarrage auto, redémarrage auto
-test_ram_sniper.py      83 tests, aucun accès réseau
+test_ram_sniper.py      85 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -722,6 +722,70 @@ Deux points d'attention :
 Raspberry Pi 4 ou 5 branché sur votre box. Même IP résidentielle, 2 watts,
 allumé en permanence. Le module tourne dessus sans modification —
 `ram_service.py install` y installe une unité systemd.
+
+### À deux, sur deux ordinateurs
+
+Le cas typique : ton Mac n'est pas allumé en permanence, celui de ton binôme
+l'est parfois. On veut que **celui qui est allumé alerte, dans le même groupe
+Telegram**, sans doublon quand les deux tournent.
+
+**1. Créer le groupe Telegram**
+
+- Nouveau groupe, ajoutez-vous tous les deux **et le bot**.
+- Écrivez un message dans le groupe.
+- Sur chaque machine : `python3 ram_setup.py` → le groupe apparaît dans la
+  liste des chats détectés, choisissez-le. Son identifiant est négatif
+  (`-1001234567890`), c'est normal.
+
+**Les deux machines utilisent le MÊME `TELEGRAM_BOT_TOKEN` et le MÊME
+`TELEGRAM_CHAT_ID`.** Un seul bot, un seul groupe.
+
+**2. Installer sur chaque machine**
+
+```bash
+# macOS
+venv/bin/python3 ram_service.py install
+
+# Windows (PowerShell ou cmd, dans le dossier du projet)
+venv\Scripts\python.exe ram_service.py install
+```
+
+Sous Windows, l'installation dépose un `.bat` dans le dossier Démarrage :
+aucun droit administrateur, relance automatique toutes les 30 s si le bot
+s'arrête, et ton binôme peut le supprimer à la main pour l'arrêter.
+
+**3. Les doublons se règlent tout seuls**
+
+Aucun serveur partagé n'est nécessaire. L'API Telegram n'autorise **qu'un seul
+`getUpdates` par bot** et renvoie HTTP 409 aux autres : la machine qui l'obtient
+devient l'instance **principale** et notifie ; l'autre passe en **secours**,
+continue de scanner sa base locale, et reprend la main automatiquement dès que
+la première s'éteint (en moins d'une minute).
+
+Vous verrez dans les logs :
+
+```json
+{"niveau": "INFO", "message": "instance secours", "raison": "une autre machine notifie déjà"}
+```
+
+Ce n'est pas une erreur — c'est le mécanisme qui fonctionne.
+
+Si le réseau tombe et que le rôle devient indéterminé, l'instance se déclare
+**principale** : mieux vaut un doublon occasionnel qu'un silence total sur une
+affaire.
+
+Pour désactiver ce mécanisme et laisser les deux machines notifier :
+
+```yaml
+telegram:
+  election_leader: false
+```
+
+**Ce qui n'est PAS partagé** : chaque machine a sa propre base `soldier.db`
+(annonces vues, stock, scores). C'est volontaire — une base SQLite posée dans
+un dossier iCloud ou OneDrive se corrompt. Conséquence pratique : le stock et
+le radar d'appariement sont propres à chaque machine. Si vous voulez les
+partager, tenez-les sur une seule des deux.
 
 ### Recevoir les alertes sur le téléphone
 

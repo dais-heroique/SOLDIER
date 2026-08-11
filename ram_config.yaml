@@ -252,6 +252,14 @@ telegram:
   # deux autres arrivaient trop tard.
   anti_spam_s: 60               # rythme de croisière : 1 notification / 60 s
   rafale_max: 4                 # mais jusqu'à 4 d'affilée sur un coup de bourre
+
+  # Deux machines (ton Mac + le PC de ton binôme) peuvent tourner en même temps
+  # sur le MÊME groupe Telegram. L'API n'autorisant qu'un seul getUpdates par
+  # bot, celle qui l'obtient devient l'instance principale et notifie ; l'autre
+  # scanne et prend le relais dès que la première s'arrête. Aucun doublon,
+  # aucun serveur partagé à installer.
+  # Mets false uniquement si tu VEUX que les deux machines notifient.
+  election_leader: true
   # Les éditions (étape 2) ne comptent JAMAIS dans cette limite.
   notifier_rejets: false        # true = notifier aussi les ❌ REJETÉ par Gemini
   notifier_appariements: true   # ⚡ COMPLÉTER KIT : toujours prioritaire

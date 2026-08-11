@@ -1060,6 +1060,52 @@ def _():
     assert "ram_sniper.py" in unite
 
 
+@test("élection de leader : une seule machine notifie")
+def _():
+    # Deux machines sur le même groupe Telegram. L'API n'autorise qu'un
+    # getUpdates par bot : celle qui l'obtient notifie, l'autre se met en
+    # retrait. Sans ça, chaque affaire arriverait en double dans le groupe.
+    ancien = ram_telegram._appel
+    ram_telegram._role.update({"valeur": None, "verifie_le": 0})
+    cfg = ram_config.get()
+
+    class CfgReel:
+        """dry_run désactivé : sinon l'élection est court-circuitée."""
+        dry_run = False
+        def val(self, chemin, defaut=None):
+            return cfg.val(chemin, defaut)
+
+    try:
+        ram_telegram._appel = lambda *a, **k: (_ for _ in ()).throw(
+            ram_telegram.TelegramError("HTTP 409 : terminated by other getUpdates"))
+        role, raison = ram_telegram.role_instance(CfgReel(), force=True)
+        assert role == "secours", f"rôle {role} : la machine notifierait en double"
+
+        ram_telegram._appel = lambda *a, **k: []
+        role, _ = ram_telegram.role_instance(CfgReel(), force=True)
+        assert role == "principal", "la reprise après arrêt de l'autre machine échoue"
+
+        # Panne réseau : on ne se tait PAS, mieux vaut un doublon qu'un silence.
+        ram_telegram._appel = lambda *a, **k: (_ for _ in ()).throw(
+            ram_telegram.TelegramError("réseau : injoignable"))
+        role, _ = ram_telegram.role_instance(CfgReel(), force=True)
+        assert role == "principal", "une panne réseau ne doit pas faire taire le bot"
+    finally:
+        ram_telegram._appel = ancien
+        ram_telegram._role.update({"valeur": None, "verifie_le": 0})
+
+
+@test("service : l'interpréteur du venv est trouvé sur les trois systèmes")
+def _():
+    import ram_service
+    py = ram_service.python_venv()
+    assert py and os.path.exists(py), f"interpréteur introuvable : {py}"
+    # Le .bat Windows doit relancer le bot en boucle, comme KeepAlive sur macOS.
+    bat = ram_service._bat_contenu()
+    assert "goto boucle" in bat, "le script Windows ne relancerait pas le bot"
+    assert "ram_sniper.py" in bat
+
+
 @test("service : prérequis vérifiés avant installation")
 def _():
     import ram_service

@@ -344,6 +344,60 @@ def boutons(annonce, etape="1", statut_verif=None):
     ]]}
 
 
+# ─────────────────────── RÔLE D'INSTANCE (2 machines, 1 groupe) ───────────────
+# Deux personnes, deux ordinateurs allumés à des moments différents, un seul
+# groupe Telegram : il faut que celui qui est allumé notifie, et que les deux
+# ne notifient pas en double quand ils tournent en même temps.
+#
+# Pas besoin de serveur partagé : l'API Telegram fournit déjà le verrou. Elle
+# n'autorise qu'UN SEUL getUpdates simultané par bot et renvoie HTTP 409 aux
+# autres. Celui qui obtient la réponse est donc, de fait, l'instance
+# principale — et quand elle s'arrête, la suivante prend la main au prochain
+# essai. C'est exactement une élection de leader, gratuite et sans état à
+# synchroniser.
+_role = {"valeur": None, "verifie_le": 0.0, "raison": None}
+_ROLE_TTL = 45.0
+
+
+def role_instance(cfg=None, force=False):
+    """« principal » (cette machine notifie) ou « secours » (elle scanne mais
+    laisse notifier l'autre). Retourne aussi la raison, pour les logs.
+
+    Une instance de secours continue de scraper : elle alimente sa base locale
+    et sera prête à prendre le relais immédiatement. Comme chaque machine a sa
+    propre adresse IP, ce double scan ne cumule aucun quota côté Vinted.
+    """
+    cfg = cfg or ram_config.get()
+    if not cfg.val("telegram.election_leader", True):
+        return "principal", "élection désactivée"
+    if cfg.dry_run:
+        return "principal", "dry-run"
+
+    maintenant = time.time()
+    if not force and _role["valeur"] and (maintenant - _role["verifie_le"]) < _ROLE_TTL:
+        return _role["valeur"], _role["raison"]
+
+    try:
+        # timeout=0 : on ne veut pas consommer d'update ici, juste savoir si
+        # quelqu'un d'autre tient déjà la ligne.
+        _appel("getUpdates", {"timeout": 0, "limit": 1}, timeout=12)
+        valeur, raison = "principal", "aucune autre instance détectée"
+    except TelegramError as e:
+        if "409" in str(e) or "terminated by other getUpdates" in str(e):
+            valeur, raison = "secours", "une autre machine notifie déjà"
+        else:
+            # Panne réseau ou Telegram indisponible : on ne se met pas en
+            # retrait pour autant. Mieux vaut un doublon qu'un silence total.
+            valeur, raison = "principal", f"état indéterminé ({e})"
+
+    _role.update({"valeur": valeur, "verifie_le": maintenant, "raison": raison})
+    return valeur, raison
+
+
+def est_principal(cfg=None):
+    return role_instance(cfg)[0] == "principal"
+
+
 # ─────────────────────── ENVOI / ÉDITION ───────────────────────
 def anti_spam_ok(cfg=None):
     """Peut-on envoyer une NOUVELLE notification maintenant ?
@@ -576,6 +630,7 @@ def boucle_callbacks(intervalle=2.0, cfg=None):
         print("[telegram] pas de token : boucle de callbacks non démarrée")
         return
     offset = None
+    conflit_signale = False
     print("[telegram] écoute des boutons inline…")
     while True:
         try:
@@ -583,6 +638,12 @@ def boucle_callbacks(intervalle=2.0, cfg=None):
             if offset is not None:
                 charge["offset"] = offset
             updates = _appel("getUpdates", charge, timeout=35) or []
+            if conflit_signale:
+                print("[telegram] ✅ reprise du rôle principal "
+                      "(l'autre machine s'est arrêtée)")
+                conflit_signale = False
+            _role.update({"valeur": "principal", "verifie_le": time.time(),
+                          "raison": "aucune autre instance détectée"})
             for update in updates:
                 offset = update["update_id"] + 1
                 cb = update.get("callback_query")
@@ -600,13 +661,18 @@ def boucle_callbacks(intervalle=2.0, cfg=None):
             # que voler les mises à jour à l'autre instance, en alternance, et
             # les boutons répondraient une fois sur deux. On se retire.
             if "409" in str(e) or "terminated by other getUpdates" in str(e):
-                print("\n[telegram] ⚠️  Un autre RAM SNIPER écoute déjà ce bot "
-                      "(HTTP 409).")
-                print("[telegram]     Les boutons des notifications sont gérés par "
-                      "l'autre instance.")
-                print("[telegram]     Cette instance continue de scanner et de "
-                      "notifier normalement.\n")
-                return
+                # Une autre machine tient la ligne : on se met en retrait, mais
+                # on RÉESSAIE régulièrement. C'est ce qui permet la reprise
+                # automatique quand l'autre s'éteint — sans ça, la machine de
+                # secours ne redeviendrait jamais principale.
+                if not conflit_signale:
+                    print("[telegram] une autre machine gère les boutons — "
+                          "reprise automatique si elle s'arrête")
+                    conflit_signale = True
+                _role.update({"valeur": "secours", "verifie_le": time.time(),
+                              "raison": "une autre machine notifie déjà"})
+                time.sleep(45)
+                continue
             print(f"[telegram] getUpdates : {e}")
             time.sleep(10)
         except Exception as e:

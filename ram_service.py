@@ -10,8 +10,9 @@ redémarre tout seul s'il s'arrête, et survit à un redémarrage de la machine.
     python3 ram_service.py restart
     python3 ram_service.py uninstall
 
-macOS  → agent launchd (~/Library/LaunchAgents)
-Linux  → unité systemd utilisateur (~/.config/systemd/user)
+macOS   → agent launchd (~/Library/LaunchAgents)
+Linux   → unité systemd utilisateur (~/.config/systemd/user)
+Windows → script .bat dans le dossier Démarrage (aucun droit admin requis)
 
 ── Pourquoi sur TA machine et pas sur un serveur gratuit ──
 Vinted est protégé par Datadome, qui bloque massivement les adresses IP de
@@ -39,12 +40,33 @@ UNITE = os.path.expanduser("~/.config/systemd/user/ram-sniper.service")
 
 MACOS = platform.system() == "Darwin"
 LINUX = platform.system() == "Linux"
+WINDOWS = platform.system() == "Windows"
+
+# Windows : raccourci dans le dossier Démarrage. Plus simple et plus fiable
+# qu'une tâche planifiée — pas de droits administrateur, et l'utilisateur peut
+# le supprimer à la main s'il veut arrêter.
+TACHE_WIN = "RamSniper"
+DEMARRAGE_WIN = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows",
+                             "Start Menu", "Programs", "Startup")
+BAT_WIN = os.path.join(BASE_DIR, "ram_sniper_demarrage.bat")
 
 
 def python_venv():
-    """L'interpréteur du venv du projet, sinon celui qui exécute ce script."""
-    candidat = os.path.join(BASE_DIR, "venv", "bin", "python3")
-    return candidat if os.path.exists(candidat) else sys.executable
+    """L'interpréteur du venv du projet, sinon celui qui exécute ce script.
+
+    Windows range le venv dans Scripts\\python.exe, pas dans bin/python3 : sans
+    ce cas, l'installation sur le PC du binôme pointerait vers un chemin
+    inexistant et le service tournerait en boucle sans jamais démarrer.
+    """
+    candidats = [
+        os.path.join(BASE_DIR, "venv", "Scripts", "python.exe"),   # Windows
+        os.path.join(BASE_DIR, "venv", "bin", "python3"),          # macOS / Linux
+        os.path.join(BASE_DIR, "venv", "bin", "python"),
+    ]
+    for candidat in candidats:
+        if os.path.exists(candidat):
+            return candidat
+    return sys.executable
 
 
 def _run(cmd, **kw):
@@ -220,6 +242,68 @@ def status_linux():
             "detail": detail.get("ActiveEnterTimestamp")}
 
 
+# ─────────────────────── Windows (dossier Démarrage) ───────────────────────
+def _python_windows():
+    """pythonw.exe lance sans ouvrir de fenêtre noire ; python.exe sinon."""
+    py = python_venv()
+    sans_console = py.replace("python.exe", "pythonw.exe")
+    return sans_console if os.path.exists(sans_console) else py
+
+
+def _bat_contenu():
+    py = _python_windows()
+    # La boucle relance le bot s'il s'arrête : c'est l'équivalent du KeepAlive
+    # de launchd, sans dépendre du Planificateur de tâches.
+    return f"""@echo off
+rem RAM SNIPER — lancement automatique. Généré par ram_service.py.
+cd /d "{BASE_DIR}"
+:boucle
+"{py}" "{os.path.join(BASE_DIR, 'ram_sniper.py')}" >> "{LOG_OUT}" 2>> "{LOG_ERR}"
+timeout /t 30 /nobreak > nul
+goto boucle
+"""
+
+
+def install_windows():
+    if not DEMARRAGE_WIN or not os.path.isdir(DEMARRAGE_WIN):
+        print(f"❌ dossier Démarrage introuvable : {DEMARRAGE_WIN}")
+        return False
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(BAT_WIN, "w", encoding="utf-8") as f:
+        f.write(_bat_contenu())
+    print(f"✅ script écrit : {BAT_WIN}")
+
+    raccourci = os.path.join(DEMARRAGE_WIN, f"{TACHE_WIN}.bat")
+    shutil.copyfile(BAT_WIN, raccourci)
+    print(f"✅ lancement au démarrage : {raccourci}")
+
+    subprocess.Popen(["cmd", "/c", "start", "/min", "", BAT_WIN],
+                     cwd=BASE_DIR, shell=False)
+    print("✅ service démarré")
+    return True
+
+
+def uninstall_windows():
+    raccourci = os.path.join(DEMARRAGE_WIN, f"{TACHE_WIN}.bat")
+    for chemin in (raccourci, BAT_WIN):
+        if os.path.exists(chemin):
+            os.remove(chemin)
+    _run(["taskkill", "/F", "/IM", "pythonw.exe"])
+    print("✅ service arrêté et désinstallé")
+    return True
+
+
+def status_windows():
+    raccourci = os.path.join(DEMARRAGE_WIN, f"{TACHE_WIN}.bat")
+    r = _run(["tasklist", "/FI", "IMAGENAME eq pythonw.exe"])
+    actif = "pythonw.exe" in (r.stdout or "")
+    if not actif:
+        r2 = _run(["tasklist", "/FI", "IMAGENAME eq python.exe"])
+        actif = "python.exe" in (r2.stdout or "")
+    return {"installe": os.path.exists(raccourci), "actif": actif,
+            "detail": "dossier Démarrage"}
+
+
 # ─────────────────────── COMMUN ───────────────────────
 def verifier_prerequis():
     """Ce qui doit être en place avant d'installer un service : rien de pire
@@ -235,7 +319,7 @@ def verifier_prerequis():
 
     # Le projet vit souvent sur un disque externe : s'il n'est pas monté au
     # démarrage, le service tournera à vide.
-    if BASE_DIR.startswith("/Volumes/"):
+    if not WINDOWS and BASE_DIR.startswith("/Volumes/"):
         volume = "/".join(BASE_DIR.split("/")[:3])
         problemes.append(f"ℹ️  projet sur le volume externe {volume} : le service "
                          f"ne démarrera que si ce disque est monté")
@@ -266,7 +350,7 @@ def purger_logs(max_mo=20):
 
 
 def status():
-    fn = status_macos if MACOS else status_linux
+    fn = status_macos if MACOS else (status_windows if WINDOWS else status_linux)
     etat = fn()
     print(f"\n── Service RAM SNIPER ({platform.system()}) ──")
     print(f"  installé : {'oui' if etat.get('installe') else 'non'}")
@@ -305,7 +389,7 @@ def status():
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
 
-    if not (MACOS or LINUX):
+    if not (MACOS or LINUX or WINDOWS):
         print(f"❌ {platform.system()} non pris en charge.")
         print("   Lance simplement : python3 ram_sniper.py")
         return 1
@@ -319,7 +403,8 @@ def main():
             print("\nCorrige ces points avant d'installer le service.")
             return 1
         purger_logs()
-        ok = install_macos() if MACOS else install_linux()
+        ok = (install_macos() if MACOS else
+              install_windows() if WINDOWS else install_linux())
         if ok:
             print("\nLe bot tourne maintenant en fond, et redémarrera tout seul.")
             print("  État  : python3 ram_service.py status")
@@ -331,11 +416,16 @@ def main():
         return 0 if ok else 1
 
     if cmd == "uninstall":
-        return 0 if (uninstall_macos() if MACOS else uninstall_linux()) else 1
+        arret = (uninstall_macos() if MACOS else
+                 uninstall_windows() if WINDOWS else uninstall_linux())
+        return 0 if arret else 1
 
     if cmd == "restart":
         if MACOS:
             _launchctl("kickstart", "-k", f"gui/{os.getuid()}/{LABEL}")
+        elif WINDOWS:
+            uninstall_windows()
+            install_windows()
         else:
             _run(["systemctl", "--user", "restart", "ram-sniper.service"])
         print("✅ service redémarré")

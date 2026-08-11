@@ -221,6 +221,7 @@ def worker_notification(cfg):
         log("INFO", "annonces en attente reprises depuis la base", n=reprises)
     derniere_reprise = time.time()
 
+    dernier_role = None
     while not ARRET.is_set():
         cfg = ram_config.get()
 
@@ -228,6 +229,17 @@ def worker_notification(cfg):
         if time.time() - derniere_reprise > 300:
             derniere_reprise = time.time()
             recharger_file_notification(cfg)
+
+        # Deux machines peuvent tourner en même temps (le Mac et le PC du
+        # binôme). Seule l'instance principale notifie ; l'autre continue de
+        # scanner et prendra le relais dès que la première s'arrête.
+        role, raison = ram_telegram.role_instance(cfg)
+        if role != dernier_role:
+            dernier_role = role
+            log("INFO", f"instance {role}", raison=raison)
+        if role != "principal":
+            ARRET.wait(20)
+            continue
         if not ram_telegram.anti_spam_ok(cfg):
             ARRET.wait(2)
             continue
