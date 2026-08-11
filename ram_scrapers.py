@@ -542,7 +542,8 @@ def diagnostic(limite=500, cfg=None, exemples=4):
             "ddr5": "DDR5 annoncée",
             "ddr3_suspecte": "DDR3 déguisée en DDR4 — piège évité",
             "capacite": "4 Go hors lot, ou capacité hors périmètre",
-            "hors_sujet": "pas une annonce de RAM (PC complet, portable, autre produit)",
+            "machine": "ordinateur complet, portable ou mini PC — pas une barrette",
+            "hors_sujet": "pas une annonce de RAM (autre produit, titre trop vague)",
         },
         "identifiées mais pas rentables — SAIN": {
             "marge": "la RAM est bien reconnue, le prix ne laisse pas de marge",

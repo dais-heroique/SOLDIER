@@ -326,6 +326,128 @@ def extraire_specs(texte, texte_norm):
     return specs
 
 
+# ─────────────────────── TYPE DE PRODUIT ───────────────────────
+# Une liste de phrases exactes ne suffit pas : « mini pc » ne reconnaît ni
+# « PC Mini ITX », ni « ThinkCentre M720q Tiny », ni « Laptops » au pluriel.
+# On raisonne donc par FAISCEAU D'INDICES — un titre qui cite un processeur ET
+# un SSD décrit un ordinateur, quels que soient les mots employés.
+
+# Machines à mémoire SO-DIMM : hors périmètre par nature, la RAM à l'intérieur
+# n'est pas de l'UDIMM desktop.
+MACHINES_SODIMM = re.compile(
+    r"\b(mini[\s-]?pc|micro[\s-]?pc|nuc|barebone|tiny|micro[\s-]?form|usff|"
+    r"tout[\s-]en[\s-]un|all[\s-]?in[\s-]?one|aio|"
+    r"portables?|laptops?|notebooks?|ultrabooks?|chromebooks?|netbooks?|"
+    r"macbooks?|imacs?|mac\s?mini|"
+    r"thinkpad|thinkcentre|elitebook|probook|elitedesk|prodesk|latitude|"
+    r"optiplex\s?(micro|mff)|inspiron|pavilion|vivobook|ideapad|zenbook|"
+    r"aspire|satellite|dynabook|omnibook|travelmate|extensa)\b", re.I)
+
+# Machines de bureau à mémoire UDIMM : la RAM dedans est dans le périmètre,
+# mais il faut démonter et écouler le reste — ce n'est pas le même métier.
+MACHINES_UDIMM = re.compile(
+    r"\b(unite\s?centrale|tour\s?(gamer|gaming|pc)?|pc\s?(fixe|complet|bureau|"
+    r"gamer|gaming|monte|multimedia|bureautique)|"
+    r"ordinateur\s?(de\s?)?(bureau|fixe|complet)?|"
+    r"config\s?(gamer|complete)|setup\s?(gamer|complet)|station\s?de\s?travail|"
+    r"workstation|serveur\s?tour|mini[\s-]?itx|micro[\s-]?atx)\b", re.I)
+
+# Un titre qui COMMENCE par « PC », « Ordinateur », « Tour »… décrit la machine
+# elle-même. « RAM DDR4 pour PC gamer » ne commence pas par là.
+RE_TITRE_MACHINE = re.compile(
+    r"^\s*(pc|ordinateur|tour|unite\s?centrale|station|desktop|"
+    r"lenovo|dell|hp|asus|acer|msi|medion|packard)\b", re.I)
+
+# Indices de composants, PONDÉRÉS. Une annonce de barrette n'a aucune raison
+# de citer une capacité de SSD ou une carte mère : ces deux-là pèsent double.
+INDICES_COMPOSANTS = {
+    "stockage": (2, re.compile(
+        r"\b(ssd|nvme|hdd|disque\s?dur|m\.?2\b|\d{3,4}\s?g[ob]\s?(ssd|hdd|nvme)|"
+        r"\d\s?to\b|\d{3,4}gb\s?(ssd|hdd))\b", re.I)),
+    "carte_mere": (2, re.compile(
+        r"\b(carte\s?mere|carte\s?mère|motherboard|socket\s?am[45]|"
+        r"chipset\s?[abxz]\d{3})\b", re.I)),
+    "processeur": (1, re.compile(
+        r"\b(i[3579][\s-]?\d{3,5}[a-z]{0,2}|core\s?i[3579]|intel\s?core|"
+        r"ryzen\s?[3579]|athlon|celeron|pentium|core\s?2|threadripper|"
+        r"core\s?ultra|\d{1,2}(th|eme|e)\s?gen)\b", re.I)),
+    "carte_graphique": (1, re.compile(
+        r"\b(rtx\s?\d{3,4}|gtx\s?\d{3,4}|\brx\s?\d{3,4}|radeon|geforce|quadro|"
+        r"carte\s?graphique|nvidia)\b", re.I)),
+    "boitier": (1, re.compile(
+        r"\b(boitier|alimentation|\bpsu\b|ventirad|watercooling|"
+        r"ecran|clavier|souris)\b", re.I)),
+    "systeme": (1, re.compile(
+        r"\b(windows\s?1[01]|win\s?1[01]|windows\s?pro|licence\s?windows|"
+        r"macos|preinstalle)\b", re.I)),
+}
+
+# Le titre annonce-t-il d'abord de la mémoire ? Un titre qui COMMENCE par
+# « RAM », « Barrette » ou « Mémoire » vend de la mémoire, même s'il précise
+# ensuite « pour PC gamer ».
+RE_TITRE_MEMOIRE = re.compile(
+    r"^\s*(kit\s+)?(de\s+)?(ram|barrettes?|memoire|memoires?|ddr4?|dimm|udimm|"
+    r"module\s?(s|memoire)?)\b", re.I)
+
+SEUIL_MACHINE = 3
+
+
+def detecter_type_produit(titre, texte_norm, pn=None, marque=None, gamme=None):
+    """Classe l'annonce : 'barrette', 'machine_sodimm', 'machine_udimm' ou
+    'incertain'.
+
+    Retourne (type, score, indices). Les indices expliquent la décision dans
+    --diag, plutôt que de rejeter sans dire pourquoi.
+
+    Faisceau d'indices pondérés, et non liste de phrases interdites : c'est ce
+    qui permet de reconnaître « PC Mini ITX Ryzen 5600G » ou « ThinkCentre
+    M720q Tiny » sans les avoir prévus mot pour mot. Les signaux « c'est bien
+    de la mémoire » retranchent, sinon « RAM DDR4 pour PC gamer » basculerait
+    à tort — or « ram pc gamer » est l'un des mots-clés de recherche.
+    """
+    points = 0
+    indices = []
+
+    m_sodimm = MACHINES_SODIMM.search(texte_norm)
+    if m_sodimm:
+        points += 3
+        indices.append(f"machine portable/compacte : « {m_sodimm.group(0)} »")
+
+    m_udimm = MACHINES_UDIMM.search(texte_norm)
+    if m_udimm:
+        points += 2
+        indices.append(f"ordinateur de bureau : « {m_udimm.group(0)} »")
+
+    titre_norm = normaliser(titre or "")
+    if RE_TITRE_MACHINE.match(titre_norm):
+        points += 2
+        indices.append("titre décrivant une machine")
+
+    for famille, (poids, motif) in INDICES_COMPOSANTS.items():
+        trouve = motif.search(texte_norm)
+        if trouve:
+            points += poids
+            indices.append(f"{famille} cité : « {trouve.group(0)} »")
+
+    # ── Signaux inverses : l'annonce vend bien de la mémoire ──
+    if RE_TITRE_MEMOIRE.match(titre_norm):
+        points -= 2
+        indices.append("titre annonçant de la mémoire")
+    if pn:
+        points -= 3
+        indices.append(f"part number mémoire lu ({pn})")
+    if marque and gamme:
+        points -= 2
+        indices.append(f"gamme mémoire identifiée ({marque} {gamme})")
+
+    if points >= SEUIL_MACHINE:
+        # SO-DIMM prime : un mini PC reste hors périmètre même s'il cite un GPU.
+        return ("machine_sodimm" if m_sodimm else "machine_udimm"), points, indices
+    if points == SEUIL_MACHINE - 1:
+        return "incertain", points, indices
+    return "barrette", points, indices
+
+
 def _accorder_specs_au_pn(specs, ref):
     """Aligne la configuration lue dans le texte sur celle du part number.
 
@@ -391,6 +513,15 @@ def detecter_exclusions(texte, texte_norm, specs, cfg=None):
     cfg = cfg or ram_config.get()
     perim = cfg.section("perimetre")
     excl = perim.get("exclusions", {}) or {}
+
+    # ── Ordinateur complet plutôt qu'une barrette ──
+    type_produit = specs.get("type_produit")
+    if type_produit == "machine_sodimm":
+        return "machine", ("ordinateur portable ou compact (mémoire SO-DIMM) : "
+                           + (specs.get("indices_produit") or ["indices multiples"])[0])
+    if type_produit == "machine_udimm" and not perim.get("accepter_pc_complets", False):
+        return "machine", ("ordinateur de bureau complet, pas une barrette : "
+                           + (specs.get("indices_produit") or ["indices multiples"])[0])
 
     # ── SO-DIMM / portable ──
     for terme in excl.get("sodimm", []):
@@ -513,6 +644,13 @@ def analyser(titre, description="", nb_photos=0, cfg=None):
     marque = detecter_marque(texte_norm, pn_marque)
     gamme = detecter_gamme(texte_norm)
 
+    # Est-ce seulement une annonce de barrette ? Ce classement précède tout le
+    # reste : inutile d'estimer la valeur de revente d'un mini PC.
+    type_produit, points_produit, indices_produit = detecter_type_produit(
+        titre, texte_norm, pn, marque, gamme)
+    specs["type_produit"] = type_produit
+    specs["indices_produit"] = indices_produit
+
     exclusion, motif = detecter_exclusions(texte, texte_norm, specs, cfg)
 
     # Doit-on même regarder cette annonce ?
@@ -607,6 +745,9 @@ def analyser(titre, description="", nb_photos=0, cfg=None):
         "cas_latency": specs.get("cas_latency"),
         "rank": specs.get("rank"),
         "est_kit": specs.get("est_kit", False),
+        "type_produit": type_produit,
+        "points_produit": points_produit,
+        "indices_produit": indices_produit,
         "ref": ref,
         "ref_approchee": ref_approchee,
         "niveau_approche": niveau_approche,

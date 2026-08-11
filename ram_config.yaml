@@ -72,6 +72,17 @@ frais:
 perimetre:
   capacites_autorisees: [8, 16, 32]
   frequence_min: 2133
+  # Les ordinateurs complets sont-ils acceptés ?
+  # false (défaut) : seules les barrettes seules sont retenues. Les mini PC,
+  #   portables, tours et cartes mères avec RAM sont rejetés — c'était la
+  #   principale source de bruit dans les alertes.
+  # true : les PC de bureau (mémoire UDIMM) passent, valorisés sur leur seule
+  #   RAM. Utile pour le gisement « PC en panne » de Leboncoin, mais il faut
+  #   alors démonter et écouler le reste. Les machines à SO-DIMM (mini PC,
+  #   portables, NUC) restent rejetées quoi qu'il arrive : leur mémoire est
+  #   hors périmètre par nature.
+  accepter_pc_complets: false
+
   # Exception 4 Go : lot de N barrettes minimum à ce prix unitaire maximum
   exception_4go:
     actif: true

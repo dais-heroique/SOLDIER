@@ -199,6 +199,74 @@ def _():
     assert r["nb_modules"] == 12
 
 
+@test("ordinateurs complets rejetés : mini PC, portable, tour, carte mère")
+def _():
+    # C'était la principale source de bruit : une liste de phrases exactes ne
+    # reconnaît ni « PC Mini ITX », ni « ThinkCentre Tiny », ni « Laptops ».
+    machines = [
+        "Mini PC Ryzen 5 5600G 16Go DDR4 256Go SSD",
+        "PC Mini ITX multimedia Ryzen 5 5600G DDR4",
+        "Lenovo ThinkCentre M720q Tiny",
+        "Laptops",
+        "HP EliteBook 840 G3, 2K IPS Display",
+        "HP 250 G8 Intel Core i5 10th Gen | 8GB RAM | 256GB SSD",
+        "Pc gaming / 8Go DDR4/256Go SSD Tour PC 4K UHD",
+        "Unite centrale gamer RTX 3060 16Go DDR4",
+        "Carte mere B450 + Ryzen 5 3600 + 16Go DDR4",
+        "Ordinateur de bureau Dell Optiplex 390 - i3 / 4Go RAM",
+    ]
+    for titre in machines:
+        r = analyse(titre)
+        assert r["exclusion"] == "machine", \
+            f"« {titre} » → {r['exclusion']} (type {r['type_produit']}, " \
+            f"{r['points_produit']} pts)"
+
+
+@test("les vraies annonces de barrettes ne sont pas emportées")
+def _():
+    # Faux positif coûteux à éviter : « ram pc gamer » est un mot-clé de
+    # recherche, et « sortie de mon pc » une formulation courante.
+    barrettes = [
+        ("RAM DDR4 16Go pour PC gamer", "corsair vengeance"),
+        ("Barrette RAM DDR4 8Go", ""),
+        ("Kit RAM DDR4 32Go Corsair Vengeance LPX 3200", "CMK32GX4M2E3200C16"),
+        ("Memoire vive DDR4 32go", ""),
+        ("Corsair Vengeance LPX 16Go", "sortie de mon pc gamer"),
+        ("DDR4 16Go 3200 pour carte mere B550", "ripjaws v"),
+        ("G.Skill Trident Z Neo 32Go 3600 CL16", "F4-3600C16D-32GTZN"),
+        ("2x8 Go DDR4 3200 HyperX Fury", "upgrade de mon pc"),
+    ]
+    for titre, desc in barrettes:
+        r = analyse(titre, desc)
+        assert r["exclusion"] != "machine", \
+            f"faux positif sur « {titre} » ({r['points_produit']} pts) : " \
+            f"{r['indices_produit']}"
+
+
+@test("les PC de bureau peuvent être acceptés sur demande, jamais les SO-DIMM")
+def _():
+    # accepter_pc_complets: true sert au gisement « PC en panne » de Leboncoin.
+    # Mais un mini PC ou un portable reste hors périmètre quoi qu'il arrive :
+    # leur mémoire est de la SO-DIMM.
+    class CfgPermissive:
+        def val(self, chemin, defaut=None):
+            if chemin == "perimetre":
+                base = dict(ram_config.get().val("perimetre", {}))
+                base["accepter_pc_complets"] = True
+                return base
+            return ram_config.get().val(chemin, defaut)
+        def section(self, nom):
+            return self.val(nom, {}) or {}
+
+    cfg = CfgPermissive()
+    tour = ram_parser.analyser("Unite centrale gamer RTX 3060 16Go DDR4", "", 1, cfg)
+    assert tour["exclusion"] != "machine", "le PC de bureau aurait dû être accepté"
+
+    mini = ram_parser.analyser("Mini PC Ryzen 5 5600G 16Go DDR4 256Go SSD", "", 1, cfg)
+    assert mini["exclusion"] == "machine", \
+        "un mini PC (SO-DIMM) doit rester rejeté même en mode permissif"
+
+
 @test("annonce hors sujet ignorée sans planter")
 def _():
     r = analyse("Chaussures Nike taille 42", "très bon état")

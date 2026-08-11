@@ -58,6 +58,7 @@ DEFAUTS = {
     },
     "perimetre": {
         "capacites_autorisees": [8, 16, 32], "frequence_min": 2133,
+        "accepter_pc_complets": False,
         "exception_4go": {"actif": True, "nb_min": 10, "prix_max_unitaire": 1.50},
         "exclusions": {"sodimm": [], "ecc": [], "generation": []},
         "pieges_ddr3": {"plateformes": [], "modeles": []},

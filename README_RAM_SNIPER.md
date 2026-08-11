@@ -46,7 +46,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 85 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 88 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -477,7 +477,7 @@ ram_sniper.py           orchestrateur : 4 workers découplés
 ram_routes.py           dashboard Flask (blueprint /ram)
 ram_setup.py            configuration guidée (chat ID automatique)
 ram_service.py          service système : démarrage auto, redémarrage auto
-test_ram_sniper.py      85 tests, aucun accès réseau
+test_ram_sniper.py      88 tests, aucun accès réseau
 ```
 
 ### Les quatre workers
@@ -621,6 +621,26 @@ Réglez `telegram.rafale_max` (4 par défaut) : c'est le nombre de notifications
 qui peuvent partir d'affilée avant que le rythme ne retombe à une par
 `anti_spam_s`. Les vendeurs publient par vagues le soir ; sans rafale, seule la
 première alerte partait.
+
+**Le bot recommande des mini PC, des portables, des tours**
+Corrigé : un classificateur de type de produit rejette les machines complètes
+(`exclusion: machine`). Il raisonne par faisceau d'indices pondérés plutôt que
+par liste de mots — un titre citant un SSD **et** un processeur décrit un
+ordinateur, quels que soient les termes employés.
+
+Les machines à SO-DIMM (mini PC, NUC, portables, tout-en-un) sont rejetées
+**définitivement** : leur mémoire est hors périmètre par nature.
+
+Les PC de bureau (mémoire UDIMM) sont rejetés par défaut. Pour le gisement
+« PC en panne » de Leboncoin, où l'on n'achète la machine que pour sa RAM :
+
+```yaml
+perimetre:
+  accepter_pc_complets: true
+```
+
+Sachez alors que la valorisation ne porte que sur la RAM — il faut démonter et
+écouler le reste.
 
 **Trop de notifications**
 Montez `scoring.seuil_notification` à 70-75, ou `scoring.marge_min_eur`.
