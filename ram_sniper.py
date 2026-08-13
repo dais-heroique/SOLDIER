@@ -624,16 +624,23 @@ def _verrou_instance():
     (HTTP 409 : l'API n'autorise qu'un seul getUpdates par bot).
 
     Retourne le descripteur du verrou (à garder ouvert) ou None si occupé.
+    Le mécanisme de verrouillage diffère selon l'OS (fcntl n'existe pas sous
+    Windows, msvcrt n'existe pas sous Linux/macOS) mais l'appelant n'a pas à
+    s'en soucier : dans les deux cas, .close() libère le verrou.
     """
-    import fcntl
     chemin = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ram_sniper.lock")
     try:
         fd = open(chemin, "w")
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fd.write(str(os.getpid()))
         fd.flush()
         return fd
-    except (OSError, BlockingIOError):
+    except OSError:
         return None
 
 
