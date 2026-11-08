@@ -120,7 +120,7 @@ def traiter_resultats(resultats, cfg):
             _enfiler_notification(r)
 
 
-def worker_scraping(cfg, une_seule_fois=False):
+def worker_scraping(cfg, une_seule_fois=False, limite_mots=None):
     """Parcourt les mots-clés en boucle, en étalant les requêtes.
 
     Les mots-clés sont mélangés à chaque cycle : toujours interroger « ddr4 »
@@ -147,10 +147,20 @@ def worker_scraping(cfg, une_seule_fois=False):
         for scraper in scrapers:
             if ARRET.is_set():
                 break
+            scraper.echecs_consecutifs = 0
             mots = scraper.mots_cles()
             random.shuffle(mots)
+            if limite_mots:
+                mots = mots[:limite_mots]
+            seuil_disj = int(cfg.val(f"sources.{scraper.source}.disjoncteur_echecs", 4))
             for mot in mots:
                 if ARRET.is_set():
+                    break
+                # Disjoncteur : N échecs d'affilée = on est bloqué. Insister ne
+                # ferait qu'aggraver le blocage (et gaspiller le temps du run).
+                if seuil_disj and getattr(scraper, "echecs_consecutifs", 0) >= seuil_disj:
+                    log("WARN", "disjoncteur : source mise de côté pour ce cycle",
+                        source=scraper.source, echecs=scraper.echecs_consecutifs)
                     break
                 if not scraper._du_a_passer(mot):
                     continue
@@ -524,6 +534,89 @@ def demarrer(cfg=None, une_seule_fois=False, avec_callbacks=True):
     return threads
 
 
+def _requetes_et_erreurs():
+    with ram_db.get_db() as conn:
+        ligne = conn.execute("SELECT COALESCE(SUM(requetes),0) r, "
+                             "COALESCE(SUM(erreurs),0) e FROM ram_scan_stat").fetchone()
+    return int(ligne["r"]), int(ligne["e"])
+
+
+def executer_ci(cfg=None):
+    """Un passage complet pour un hébergement par cron (GitHub Actions) :
+    scan de quelques mots-clés par source, envoi des notifications en attente,
+    analyses vision si une clé Gemini existe, puis sortie propre.
+
+    Code de sortie : 0 = passage normal ; 3 = TOUTES les requêtes du passage
+    ont échoué (typiquement : IP de serveur bloquée par Datadome). Le code
+    non nul fait apparaître le run en rouge et GitHub t'écrit : tu sais tout
+    de suite que l'hébergement gratuit ne passe pas, au lieu de croire que
+    le bot surveille alors qu'il est aveugle.
+    """
+    cfg = cfg or ram_config.get()
+    ram_db.init_db()
+    os.environ["RAM_SANS_ELECTION"] = "1"     # une seule instance en ligne
+
+    limite_mots = int(cfg.val("ci.mots_cles_par_source", 8))
+    budget = float(cfg.val("ci.budget_notifications_s", 240))
+    manquants = ram_config.secrets_manquants()
+    if manquants and not cfg.dry_run:
+        log("WARN", "secrets manquants", manquants=manquants)
+
+    vision_ok = False
+    if cfg.val("vision.actif", True):
+        try:
+            vision_ok = bool(ram_vision.provider_par_defaut(cfg).disponible())
+        except Exception:
+            vision_ok = False
+
+    req0, err0 = _requetes_et_erreurs()
+    ARRET.clear()
+    cibles = [("notification", worker_notification, (cfg,))]
+    if vision_ok:
+        cibles.append(("vision", worker_vision, (cfg,)))
+    fils = []
+    for nom, cible, args in cibles:
+        t = threading.Thread(target=_superviser, args=(nom, cible, args),
+                             name=f"ram-{nom}", daemon=True)
+        t.start()
+        fils.append(t)
+
+    worker_scraping(cfg, une_seule_fois=True, limite_mots=limite_mots)
+
+    # Laisser partir les notifications (anti-spam compris) et finir la vision,
+    # dans la limite du budget : le reste sera repris au passage suivant.
+    fin = time.time() + budget
+    while time.time() < fin:
+        with _verrou_notif:
+            en_attente = len(_file_notif)
+        etat_vision = ram_db.etat_file_vision() if vision_ok else {}
+        vision_restante = etat_vision.get("en_attente", 0) + etat_vision.get("en_cours", 0)
+        if en_attente == 0 and vision_restante == 0:
+            break
+        time.sleep(2)
+    ARRET.set()
+    for t in fils:
+        t.join(timeout=10)
+
+    try:    # fusionne le journal WAL : la base est ensuite un fichier unique
+        with ram_db.get_db() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:
+        log("WARN", "checkpoint de la base impossible", erreur=str(e))
+
+    req1, err1 = _requetes_et_erreurs()
+    requetes, erreurs = req1 - req0, err1 - err0
+    log("INFO", "passage terminé", requetes=requetes, erreurs=erreurs,
+        nouvelles=STATS["annonces_nouvelles"], notifiees=STATS["notifiees"],
+        rejetees=STATS["rejetees"])
+    if requetes > 0 and erreurs >= requetes:
+        log("ERROR", "toutes les requêtes ont échoué — IP probablement bloquée "
+            "(Datadome). Lance le workflow « Test réseau » ou configure "
+            "SNIPER_PROXY_URL.", requetes=requetes)
+        return 3
+    return 0
+
+
 # Santé des workers, pour --etat et le dashboard.
 SANTE = {}
 SANTE_FICHIER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -587,6 +680,7 @@ def _superviser(nom, cible, args):
 OPTIONS = {
     "--dry-run": "n'envoie aucune notification",
     "--once": "un seul tour de scan puis sortie",
+    "--ci": "un passage complet (scan + notifications) puis sortie — hébergement cron",
     "--dashboard": "sert le dashboard web (défaut : port 8010)",
     "--diag": "explique pourquoi les annonces sont rejetées",
     "--replay": "rejoue les annonces archivées à travers le scoring courant",
@@ -719,6 +813,9 @@ def main():
         print("  • Pour arrêter l'instance en cours : Ctrl+C dans son terminal")
         print("  • Pour passer outre malgré tout : --force\n")
         sys.exit(1)
+
+    if "--ci" in args:
+        sys.exit(executer_ci(cfg))
 
     print("═" * 68)
     print("  🎯 RAM SNIPER — DDR4 UDIMM desktop")

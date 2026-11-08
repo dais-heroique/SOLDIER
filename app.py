@@ -32,6 +32,8 @@ from datetime import datetime
 from flask import Flask, jsonify, request, Response
 
 import lbc
+import reseau
+import vendeur_avis
 from market_db import CATEGORIES, MIN_PRICE
 from price_history import PriceHistory
 from scoring import full_report
@@ -313,6 +315,17 @@ def check_availability_lbc(client, url):
         return None   # erreur réseau/rate-limit/autre: indéterminé, ne pas supprimer
 
 
+def vendeur_accepte(source, client, vendeur_id):
+    """Filtre « vendeur avec au moins 1 avis » (SNIPER_MIN_REVIEWS pour changer
+    le minimum, 0 pour désactiver). Retourne (ok, definitif) : un rejet
+    définitif est mémorisé dans `seen`, un échec passager (403, réseau) sera
+    retenté au prochain tour."""
+    v = vendeur_avis.evaluer(source, client, vendeur_id)
+    if v["ok"]:
+        return True, False
+    return False, not v.get("transitoire")
+
+
 def scan_lbc(client, cat, model, ref, seen, observed, dup_tracker=None):
     deals = []
     is_psu = (cat == "PSU")
@@ -349,6 +362,12 @@ def scan_lbc(client, cat, model, ref, seen, observed, dup_tracker=None):
                     continue
                 tier, func, margin = assess(subject, desc, price, ref)
                 if tier:
+                    ok_v, definitif = vendeur_accepte("leboncoin", client,
+                                                      getattr(ad, "_user_id", None))
+                    if not ok_v:
+                        if definitif:
+                            seen[key] = time.time()
+                        continue
                     img = ""
                     if ad.images:
                         im = ad.images[0]; img = im.url if hasattr(im,"url") else str(im)
@@ -398,6 +417,11 @@ def scan_vinted(vc, cat, model, ref, seen, observed, dup_tracker=None):
                     continue
                 tier,func,margin=assess(subject,desc,price,ref)
                 if tier:
+                    ok_v, definitif = vendeur_accepte("vinted", vc, ad.get("vendeur_id"))
+                    if not ok_v:
+                        if definitif:
+                            seen[key]=time.time()
+                        continue
                     d = make_deal(cat,model,ref,ad,tier,func,margin,"vinted",listing=listing)
                     if d:
                         deals.append(d)
@@ -622,7 +646,7 @@ def build_clients(settings):
     sources = settings.get("sources", {})
 
     lbc_active = sources.get("lbc", True) and country_cfg.get("has_lbc", False)
-    client = lbc.Client(max_retries=3) if lbc_active else None
+    client = reseau.client_lbc(max_retries=3) if lbc_active else None
 
     vinted_active = sources.get("vinted", True) and country_cfg.get("has_vinted", False) and _HAS_VINTED
     vc = VintedClient(country=country_cfg["code"]) if vinted_active else None

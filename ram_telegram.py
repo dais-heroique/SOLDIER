@@ -21,6 +21,7 @@ bannir le compte. Les boutons ouvrent l'annonce, on valide à la main.
 """
 
 import json
+import os
 import re
 import time
 import urllib.error
@@ -368,6 +369,8 @@ def role_instance(cfg=None, force=False):
     propre adresse IP, ce double scan ne cumule aucun quota côté Vinted.
     """
     cfg = cfg or ram_config.get()
+    if os.environ.get("RAM_SANS_ELECTION"):
+        return "principal", "exécution planifiée (une seule instance)"
     if not cfg.val("telegram.election_leader", True):
         return "principal", "élection désactivée"
     if cfg.dry_run:

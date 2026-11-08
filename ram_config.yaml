@@ -6,6 +6,27 @@
 # Les secrets (token Telegram, clé Gemini) sont dans .env, JAMAIS ici.
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ─────────────────────────── MODE HÉBERGÉ (--ci) ───────────────────────────
+# Utilisé par le workflow GitHub Actions (python ram_sniper.py --ci) : un
+# passage toutes les ~10 min au lieu d'un processus qui tourne en continu.
+ci:
+  mots_cles_par_source: 8       # tirés au hasard à chaque passage (rotation)
+  budget_notifications_s: 240   # temps laissé à l'envoi Telegram après le scan
+
+# ─────────────────────────── FILTRE VENDEUR ───────────────────────────
+# Un vendeur sans aucun avis est écarté (profil type de l'arnaque : compte
+# créé la veille, prix trop beau). Le nombre d'avis n'est pas dans la
+# recherche : une requête par vendeur, uniquement pour les annonces qui ont
+# passé les exclusions de périmètre, et mise en cache.
+# SNIPER_MIN_REVIEWS=3 (variable d'environnement) prend le pas sur avis_min.
+filtre_vendeur:
+  actif: true
+  avis_min: 1
+  # Que faire si le profil est illisible (blocage, réseau) ?
+  #   rejeter : l'annonce n'est pas notifiée, et retentée au scan suivant
+  #   garder  : l'annonce passe sans vérification
+  si_inconnu: rejeter
+
 # ─────────────────────────── SEUILS DE SCORING ───────────────────────────
 scoring:
   # Pré-score (texte seul, instantané)
@@ -194,6 +215,7 @@ sources:
     delai_entre_requetes_s: [2.5, 5.0]
     max_resultats_par_requete: 20
     backoff_429_s: [60, 120, 300, 600]
+    disjoncteur_echecs: 4             # 4 échecs d'affilée → source coupée pour ce cycle
     mots_cles:
       - ddr4
       - ddr 4
@@ -223,6 +245,7 @@ sources:
     delai_entre_requetes_s: [5.0, 9.0]
     max_resultats_par_requete: 35
     backoff_429_s: [120, 300, 900, 1800]
+    disjoncteur_echecs: 4
     # Retrait en main propre = 0 frais, 0 risque de casse
     departements: ["74", "73", "01", "69"]   # Haute-Savoie, Savoie, Ain, Rhône
     mots_cles:

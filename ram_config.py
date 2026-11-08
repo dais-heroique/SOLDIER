@@ -37,6 +37,7 @@ except ImportError:                                    # pragma: no cover
 # ─────────────────────── DÉFAUTS ───────────────────────
 # Le YAML est la référence ; ces valeurs ne servent que si une clé manque.
 DEFAUTS = {
+    "filtre_vendeur": {"actif": True, "avis_min": 1, "si_inconnu": "rejeter"},
     "scoring": {
         "seuil_notification": 55, "seuil_vision": 45, "seuil_confirme": 70,
         "marge_min_eur": 20, "marge_min_pct": 45,

@@ -36,6 +36,8 @@ SCHEMA_VERSION = 1
 MIGRATIONS = [
     (2, "trace de suppression des messages Telegram",
      ["ALTER TABLE ram_notification ADD COLUMN supprime_le REAL"]),
+    (3, "nombre d'avis du vendeur (filtre vendeur_avis)",
+     ["ALTER TABLE ram_annonce ADD COLUMN vendeur_avis INTEGER"]),
 ]
 
 
@@ -392,7 +394,7 @@ def maj_prix_reference(ref_id, prix, source, n_ventes=0):
 _ANNONCE_CHAMPS = (
     "source", "source_id", "url", "titre", "description", "mot_cle",
     "prix_affiche", "frais_port", "frais_protection", "prix_total", "main_propre",
-    "vendeur_pseudo", "vendeur_note", "vendeur_ventes", "localisation",
+    "vendeur_pseudo", "vendeur_note", "vendeur_ventes", "vendeur_avis", "localisation",
     "code_postal", "departement", "photos", "nb_photos", "photos_hash",
     "publie_le", "ref_id", "pn_detecte", "pn_normalise", "capacite_module_go",
     "nb_modules", "capacite_totale_go", "frequence_mhz", "cas_latency",
@@ -472,6 +474,15 @@ def maj_annonce(annonce_id, champs):
     with get_db() as conn:
         conn.execute(f"UPDATE ram_annonce SET {sets} WHERE id=?",
                      list(d.values()) + [annonce_id])
+
+
+def supprimer_annonce(annonce_id):
+    """Oublie une annonce qu'on vient d'insérer : elle sera revue comme
+    nouvelle au prochain scan. Sert quand une vérification externe (profil
+    vendeur) échoue pour une raison passagère — mieux vaut retenter que
+    graver un rejet définitif sur une annonce peut-être excellente."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM ram_annonce WHERE id=?", (annonce_id,))
 
 
 def annonce_existe(url):

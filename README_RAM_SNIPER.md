@@ -60,7 +60,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 92 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 109 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -474,6 +474,27 @@ sources:
 Les mots-clés de recherche, les listes d'exclusion (SO-DIMM, ECC, DDR3) et les
 multiplicateurs de prix sont également dans ce fichier.
 
+### Filtre vendeur : au moins un avis
+
+```yaml
+filtre_vendeur:
+  actif: true
+  avis_min: 1              # SNIPER_MIN_REVIEWS=3 (variable d'environnement) prend le pas
+  si_inconnu: rejeter      # profil illisible : rejeter | garder
+```
+
+Un vendeur sans aucun avis est écarté, sur Vinted comme sur Leboncoin (le
+même filtre protège `app.py`). Le nombre d'avis n'étant pas dans les résultats
+de recherche, le bot fait **une requête de profil par vendeur**, et seulement
+pour les annonces qui ont déjà passé les exclusions de périmètre (DDR3,
+SO-DIMM, PC complet…). Le résultat est mis en cache 6 h.
+
+- **0 avis** → l'annonce est rejetée (`exclusion = vendeur_sans_avis`), visible
+  dans `--diag` et le journal.
+- **Profil illisible** (403, 429, réseau) → l'annonce n'est *pas* rejetée à vie :
+  elle est oubliée et retentée au scan suivant.
+- Pour désactiver : `avis_min: 0`.
+
 ### Rythme de scraping
 
 Les délais par défaut visent **6 mois sans blacklist**, pas la vitesse :
@@ -734,6 +755,58 @@ les caractéristiques techniques sont resynchronisées.
 
 ## 10. Tourner en continu
 
+### En ligne, gratuitement : GitHub Actions
+
+Le dépôt est public, donc les minutes GitHub Actions sont gratuites et
+illimitées. Le workflow `.github/workflows/ram-sniper.yml` lance
+`python ram_sniper.py --ci` toutes les ~10 minutes : quelques mots-clés par
+source (tirés au hasard, ils tournent d'un passage à l'autre), filtre vendeur,
+envoi Telegram, puis sortie. La base SQLite est conservée d'un passage à l'autre
+par le cache GitHub.
+
+**Mise en route (5 minutes)**
+
+1. Sur GitHub : *Settings → Secrets and variables → Actions → New repository
+   secret* : `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID` (obligatoires),
+   `GEMINI_API_KEY` (facultatif : analyse des photos).
+2. Onglet *Actions → Test réseau (Vinted + Leboncoin) → Run workflow*.
+   **C'est l'étape décisive** (voir juste dessous).
+3. Si le test est vert : *Actions → RAM Sniper (scan planifié) → Run workflow*
+   pour un premier passage, puis le cron prend le relais.
+4. Éteins le bot sur le Mac (`ram_service.py uninstall`) : deux instances
+   doubleraient les requêtes et les notifications.
+
+**Le test réseau peut être rouge.** Vinted et Leboncoin sont protégés par
+Datadome, qui bloque souvent les IP de centres de données — et GitHub en est
+un. Ça n'a pas pu être vérifié depuis l'environnement où ce workflow a été
+écrit : seul le test réseau, lancé depuis les serveurs GitHub, le dira. S'il est
+rouge, trois issues :
+
+| Option | Coût | Remarque |
+|---|---|---|
+| Secret `SNIPER_PROXY_URL` (`http://user:mdp@hote:port`) | proxy résidentiel payant | Les requêtes sortent par une IP « de particulier ». Gratuit = proxys publics, inutilisables en pratique. |
+| Raspberry Pi / vieux PC chez toi | ~50 € une fois, ou 0 | IP résidentielle, voir plus bas |
+| Garder le Mac en service | 0 | `ram_service.py install` |
+
+Quand tout est bloqué, un passage sort en code 3 : le run devient rouge et
+GitHub t'envoie un e-mail. Le bot ne reste jamais « aveugle » sans que tu le saches.
+
+**Limites du mode hébergé**
+
+- **Les boutons Telegram** (ignorer, acheté…) ne répondent pas : aucun processus
+  n'écoute en continu. Les notifications et leurs liens fonctionnent normalement.
+- **Cadence** : GitHub peut retarder ou sauter des passages planifiés (5 min
+  minimum, souvent 10-15 en pratique). Sur un marché où une affaire part en
+  minutes, c'est plus lent qu'un processus continu.
+- **Inactivité** : GitHub désactive les workflows planifiés d'un dépôt sans
+  activité depuis 60 jours. Le workflow se réactive lui-même à chaque passage ;
+  vérifie de temps en temps l'onglet *Actions*.
+- **La base** vit dans le cache GitHub (supprimé après 7 jours sans accès) :
+  s'il est perdu, le bot repart d'une base vide — les annonces des 3 dernières
+  heures peuvent être renotifiées une fois.
+- Les **logs** d'un dépôt public sont publics : ils contiennent des titres et
+  URL d'annonces, jamais tes secrets (GitHub les masque).
+
 ### Le facteur décisif : Datadome
 
 Vinted est protégé par **Datadome**, qui bloque massivement les adresses IP de
@@ -785,7 +858,7 @@ Deux points d'attention :
 | Google Cloud e2-micro | ✅ (carte requise) | ❌ IP datacenter → 403 |
 | PythonAnywhere gratuit | ✅ | ❌ Vinted hors de la liste blanche |
 | Render / Railway | ❌ plus de vrai palier gratuit pour un worker | ❌ |
-| GitHub Actions (cron) | ✅ | ❌ IP datacenter, et 5 min minimum entre deux runs |
+| GitHub Actions (cron) | ✅ | ⚠️ IP datacenter : à tester avec le workflow « Test réseau » (voir ci-dessus) |
 
 **Le meilleur rapport effort/résultat si vous voulez éteindre le Mac** : un
 Raspberry Pi 4 ou 5 branché sur votre box. Même IP résidentielle, 2 watts,

@@ -1339,6 +1339,274 @@ def _():
 
 
 # ═══════════════════════════════════════════════════════════
+section("Filtre vendeur : au moins un avis")
+
+import vendeur_avis                                               # noqa: E402
+import vinted_client                                              # noqa: E402
+vendeur_avis.PAUSE_S = (0, 0)       # pas de pause réseau dans les tests
+
+
+class _FauxVinted:
+    def __init__(self, avis=None, erreur=None):
+        self.avis, self.erreur, self.appels = avis, erreur, 0
+
+    def get_user_feedback(self, vendeur_id):
+        self.appels += 1
+        if self.erreur:
+            raise self.erreur
+        return {"avis": self.avis, "note": 4.5, "pseudo": f"vendeur{vendeur_id}"}
+
+
+def _cfg_filtre(**kw):
+    return ram_config.Config({"filtre_vendeur": kw})
+
+
+@test("vendeur à 0 avis : écarté, avec un motif lisible")
+def _():
+    vendeur_avis.vider_cache()
+    v = vendeur_avis.evaluer("vinted", _FauxVinted(avis=0), 101)
+    assert not v["ok"] and not v["transitoire"]
+    assert "0 avis" in v["motif"], v["motif"]
+
+
+@test("vendeur à 1 avis : accepté ; SNIPER_MIN_REVIEWS relève le seuil")
+def _():
+    vendeur_avis.vider_cache()
+    assert vendeur_avis.evaluer("vinted", _FauxVinted(avis=1), 102)["ok"]
+    os.environ["SNIPER_MIN_REVIEWS"] = "3"
+    try:
+        vendeur_avis.vider_cache()
+        assert not vendeur_avis.evaluer("vinted", _FauxVinted(avis=2), 103)["ok"]
+        assert vendeur_avis.evaluer("vinted", _FauxVinted(avis=3), 104)["ok"]
+    finally:
+        del os.environ["SNIPER_MIN_REVIEWS"]
+
+
+@test("filtre désactivé (avis_min 0) : aucune requête de profil")
+def _():
+    vendeur_avis.vider_cache()
+    faux = _FauxVinted(avis=0)
+    v = vendeur_avis.evaluer("vinted", faux, 105, _cfg_filtre(avis_min=0))
+    assert v["ok"] and faux.appels == 0
+
+
+@test("profil illisible : rejeté par défaut, marqué transitoire ; « garder » le laisse passer")
+def _():
+    vendeur_avis.vider_cache()
+    faux = _FauxVinted(erreur=vinted_client.VintedError("HTTP 403", status=403))
+    v = vendeur_avis.evaluer("vinted", faux, 106)
+    assert not v["ok"] and v["transitoire"]
+    vendeur_avis.vider_cache()
+    v2 = vendeur_avis.evaluer("vinted", faux, 107, _cfg_filtre(si_inconnu="garder"))
+    assert v2["ok"] and v2["avis"] is None
+
+
+@test("identifiant vendeur absent : traité comme inconnu, pas comme transitoire")
+def _():
+    v = vendeur_avis.evaluer("vinted", _FauxVinted(avis=9), None)
+    assert not v["ok"] and not v["transitoire"]
+
+
+@test("un vendeur n'est interrogé qu'une fois (cache) ; un échec n'est pas réessayé aussitôt")
+def _():
+    vendeur_avis.vider_cache()
+    faux = _FauxVinted(avis=5)
+    for _ in range(3):
+        vendeur_avis.evaluer("vinted", faux, 108)
+    assert faux.appels == 1, f"{faux.appels} requêtes pour un seul vendeur"
+    vendeur_avis.vider_cache()
+    ko = _FauxVinted(erreur=RuntimeError("réseau"))
+    for _ in range(3):
+        vendeur_avis.evaluer("vinted", ko, 109)
+    assert ko.appels == 1, "un vendeur en échec ne doit pas être martelé"
+
+
+@test("Vinted : le compteur d'avis est lu, ou reconstitué depuis les trois compteurs")
+def _():
+    f = vinted_client.VintedClient._parse_feedback
+    assert f({"feedback_count": 12, "feedback_reputation": 0.9})["avis"] == 12
+    assert f({"feedback_count": 0})["avis"] == 0
+    assert f({"positive_feedback_count": 4, "neutral_feedback_count": 1,
+              "negative_feedback_count": 1})["avis"] == 6
+    assert f({"feedback_count": 3, "feedback_reputation": 1})["note"] == 5.0
+    try:
+        f({"login": "x"})
+        assert False, "un profil sans compteur ne doit pas valoir « 0 avis »"
+    except vinted_client.VintedError:
+        pass
+
+
+@test("Vinted : la normalisation expose l'identifiant du vendeur")
+def _():
+    vc = vinted_client.VintedClient.__new__(vinted_client.VintedClient)
+    vc.currency = "EUR"
+    n = vc._normalize({"id": 77, "title": "Kit DDR4", "price": {"amount": "30"},
+                       "url": "https://www.vinted.fr/items/77",
+                       "user": {"id": 555, "login": "marie"}})
+    assert n["vendeur_id"] == 555 and n["vendeur_pseudo"] == "marie" and n["id"] == 77
+
+
+@test("Vinted : get_user_feedback lit le profil (session simulée)")
+def _():
+    class _Rep:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"user": {"id": 9, "login": "paul", "feedback_count": 7,
+                             "feedback_reputation": 0.98}}
+
+    class _Session:
+        def get(self, url, **kw):
+            assert url.endswith("/api/v2/users/9"), url
+            return _Rep()
+
+    vc = vinted_client.VintedClient.__new__(vinted_client.VintedClient)
+    vc.host, vc.verbose, vc.session = "https://www.vinted.fr", False, _Session()
+    vc._ensure_session = lambda force=False: None
+    info = vc.get_user_feedback(9)
+    assert info["avis"] == 7 and info["pseudo"] == "paul"
+
+
+@test("Leboncoin : avis lus sur le profil, repli sur la fiche boutique des pros")
+def _():
+    from types import SimpleNamespace as NS
+    particulier = NS(name="Léa", feedback=NS(received_count=4, score=4.7), pro=None)
+    zero = NS(name="Neuf", feedback=NS(received_count=0, score=None), pro=None)
+    pro = NS(name="Boutique", feedback=NS(received_count=None, score=None),
+             pro=NS(rating=NS(user_ratings_total=120)))
+
+    class _Client:
+        def get_user(self, uid):
+            return {"a": particulier, "b": zero, "c": pro}[uid]
+
+    vendeur_avis.vider_cache()
+    assert vendeur_avis.evaluer("leboncoin", _Client(), "a")["avis"] == 4
+    assert not vendeur_avis.evaluer("leboncoin", _Client(), "b")["ok"]
+    assert vendeur_avis.evaluer("leboncoin", _Client(), "c")["avis"] == 120
+
+
+def _brut_vendeur(n):
+    return {"url": f"https://vinted.fr/vendeur/{n}",
+            "titre": "Kit DDR4 32Go Corsair Vengeance LPX 3200",
+            "description": "CMK32GX4M2E3200C16 2x16Go testé", "prix": 62.0,
+            "photos": ["https://x/a.jpg"], "vendeur_id": 4000 + n}
+
+
+@test("pipeline : un vendeur à 0 avis est rejeté et jamais notifiable")
+def _():
+    vendeur_avis.vider_cache()
+    verif = lambda brut: vendeur_avis.evaluer("vinted", _FauxVinted(avis=0), brut["vendeur_id"])
+    r = ram_scrapers.traiter_annonce(_brut_vendeur(1), "vinted", cfg=None, verif_vendeur=verif)
+    assert r["nouvelle"] and not r["notifiable"] and not r["a_analyser"]
+    assert r["pre"]["exclusion"] == "vendeur_sans_avis"
+    en_base = ram_db.get_annonce(r["annonce"]["id"])
+    assert en_base["statut"] == "rejete" and en_base["vendeur_avis"] == 0
+
+
+@test("pipeline : un vendeur avec avis passe, et son nombre d'avis est conservé")
+def _():
+    vendeur_avis.vider_cache()
+    verif = lambda brut: vendeur_avis.evaluer("vinted", _FauxVinted(avis=12), brut["vendeur_id"])
+    r = ram_scrapers.traiter_annonce(_brut_vendeur(2), "vinted", cfg=None, verif_vendeur=verif)
+    assert not r["pre"]["exclusion"], r["pre"].get("rejet_motif")
+    en_base = ram_db.get_annonce(r["annonce"]["id"])
+    assert en_base["vendeur_avis"] == 12 and en_base["statut"] != "rejete"
+    assert en_base["vendeur_note"] == 4.5, "la note du profil doit être gardée"
+
+
+@test("pipeline : profil illisible → l'annonce est oubliée puis retentée, pas rejetée à vie")
+def _():
+    vendeur_avis.vider_cache()
+    ko = _FauxVinted(erreur=vinted_client.VintedError("HTTP 429", status=429))
+    verif_ko = lambda brut: vendeur_avis.evaluer("vinted", ko, brut["vendeur_id"])
+    brut = _brut_vendeur(3)
+    r = ram_scrapers.traiter_annonce(brut, "vinted", cfg=None, verif_vendeur=verif_ko)
+    assert not r["nouvelle"] and not r["notifiable"]
+    assert not ram_db.annonce_existe(brut["url"]), "l'annonce doit être oubliée pour être retentée"
+    vendeur_avis.vider_cache()
+    ok = _FauxVinted(avis=8)
+    verif_ok = lambda b: vendeur_avis.evaluer("vinted", ok, b["vendeur_id"])
+    r2 = ram_scrapers.traiter_annonce(brut, "vinted", cfg=None, verif_vendeur=verif_ok)
+    assert r2["nouvelle"] and not r2["pre"]["exclusion"]
+
+
+@test("pipeline : une annonce hors périmètre ne déclenche aucune requête de profil")
+def _():
+    vendeur_avis.vider_cache()
+    faux = _FauxVinted(avis=3)
+    verif = lambda brut: vendeur_avis.evaluer("vinted", faux, brut["vendeur_id"])
+    brut = {"url": "https://vinted.fr/vendeur/ddr3", "titre": "Barrette RAM DDR3 8Go 1600",
+            "description": "DDR3 PC3-12800", "prix": 10.0, "photos": ["a.jpg"],
+            "vendeur_id": 4999}
+    r = ram_scrapers.traiter_annonce(brut, "vinted", cfg=None, verif_vendeur=verif)
+    assert r["pre"]["exclusion"] and faux.appels == 0, \
+        "les requêtes de profil doivent être réservées aux annonces dans le périmètre"
+
+
+@test("disjoncteur : une source qui échoue d'affilée est mise de côté pour le cycle")
+def _():
+    import ram_sniper
+
+    class _Bloquee:
+        source = "vinted"
+        echecs_consecutifs = 0
+        appels = 0
+        def mots_cles(self): return [f"mot{i}" for i in range(10)]
+        def _du_a_passer(self, mot): return True
+        def scanner_mot_cle(self, mot):
+            self.appels += 1
+            self.echecs_consecutifs += 1
+            return []
+
+    faux = _Bloquee()
+    orig = ram_scrapers.ScraperVinted
+    ram_scrapers.ScraperVinted = lambda cfg: faux
+    orig_pause = ram_scrapers._pause
+    orig_get = ram_config.get
+    ram_scrapers._pause = lambda *a, **k: None
+    cfg = ram_config.Config({"sources": {"vinted": {"actif": True, "disjoncteur_echecs": 3},
+                                         "leboncoin": {"actif": False}}})
+    ram_config.get = lambda force=False: cfg     # le worker relit la config à chaque cycle
+    try:
+        ram_sniper.worker_scraping(cfg, une_seule_fois=True)
+    finally:
+        ram_scrapers.ScraperVinted = orig
+        ram_scrapers._pause = orig_pause
+        ram_config.get = orig_get
+    assert faux.appels == 3, f"{faux.appels} requêtes malgré le disjoncteur"
+
+
+@test("proxy sortant : absent = aucun proxy ; identifiants encodés conservés pour lbc")
+def _():
+    import reseau
+    os.environ.pop("SNIPER_PROXY_URL", None)
+    assert reseau.proxies_http() is None
+    url = "http://us%40er:p%3Aw@proxy.example:8080"
+    os.environ["SNIPER_PROXY_URL"] = url
+    try:
+        assert reseau.proxies_http() == {"http": url, "https": url}
+        try:
+            proxy = reseau.proxy_lbc()
+        except ImportError:
+            return      # module lbc absent de cet environnement de test
+        assert proxy.url == url, f"URL proxy altérée : {proxy.url}"
+    finally:
+        del os.environ["SNIPER_PROXY_URL"]
+
+
+@test("mode --ci : option reconnue, pas d'élection de leader")
+def _():
+    import ram_sniper
+    assert ram_sniper._valider_options(["--ci"], silencieux=True)
+    os.environ["RAM_SANS_ELECTION"] = "1"
+    try:
+        role, _ = ram_telegram.role_instance(ram_config.get(), force=True)
+        assert role == "principal"
+    finally:
+        del os.environ["RAM_SANS_ELECTION"]
+
+
+# ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]
 if RESULTATS["ko"]:
