@@ -1,0 +1,8 @@
+# Dépendances du bot (scan + notifications). Utilisé par GitHub Actions ;
+# en local : venv/bin/pip install -r requirements.txt
+lbc>=1.1.9          # client Leboncoin
+curl_cffi>=0.7      # empreinte TLS de navigateur (Vinted/Datadome)
+pyyaml>=6           # ram_config.yaml
+requests>=2.31
+pillow>=10          # analyse des photos (vision)
+flask>=3            # dashboard et app.py

@@ -29,6 +29,7 @@ from urllib.parse import urlparse, parse_qs
 
 from countries import get_country_config
 from currency import to_eur
+import reseau
 
 try:
     from curl_cffi import requests as cffi
@@ -86,6 +87,13 @@ class VintedClient:
             "Accept": "application/json, text/plain, */*",
             "Referer": self.host + "/",
         })
+        self._appliquer_proxy()
+
+    def _appliquer_proxy(self):
+        """Proxy sortant optionnel (SNIPER_PROXY_URL) — voir reseau.py."""
+        px = reseau.proxies_http()
+        if px:
+            self.session.proxies = px
 
     def _ensure_session(self, force=False):
         """Récupère/rafraîchit le cookie de session Datadome. Essaie plusieurs
@@ -104,6 +112,7 @@ class VintedClient:
                         "Accept": "application/json, text/plain, */*",
                         "Referer": self.host + "/",
                     })
+                    self._appliquer_proxy()
                 r = self.session.get(self.host, timeout=15)
                 self._log(f"init cookie via {imp}: HTTP {r.status_code}, "
                           f"{len(r.cookies)} cookie(s)")
@@ -198,6 +207,79 @@ class VintedClient:
 
         raise last_err or VintedError("échec de recherche sans détail")
 
+    # ─────────────── Profil vendeur (nombre d'avis) ───────────────
+    @staticmethod
+    def _parse_feedback(user):
+        """Extrait le nombre d'avis d'un profil /api/v2/users/{id}.
+
+        Champs documentés par les scrapers publics : feedback_count (total),
+        positive/neutral/negative_feedback_count, feedback_reputation (0 à 1).
+        Si le total manque, on additionne les trois compteurs ; si rien n'est
+        lisible on lève une erreur plutôt que d'inventer « 0 avis ».
+        """
+        count = user.get("feedback_count")
+        if count is None:
+            parts = [user.get(k) for k in ("positive_feedback_count",
+                                           "neutral_feedback_count",
+                                           "negative_feedback_count")]
+            if any(p is not None for p in parts):
+                count = sum(int(p or 0) for p in parts)
+        if count is None:
+            raise VintedError("profil vendeur sans compteur d'avis", status=200)
+        rep = user.get("feedback_reputation")
+        try:
+            note = round(float(rep) * 5, 2) if rep is not None else None
+        except (TypeError, ValueError):
+            note = None
+        return {"avis": int(count), "note": note, "pseudo": user.get("login"),
+                "positifs": user.get("positive_feedback_count"),
+                "negatifs": user.get("negative_feedback_count")}
+
+    def get_user_feedback(self, user_id, max_retries=2):
+        """Nombre d'avis d'un vendeur. Même discipline que search() : cookie
+        rafraîchi sur 401/403, pause sur 429, erreur explicite sinon."""
+        url = f"{self.host}/api/v2/users/{user_id}"
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                self._ensure_session(force=(attempt > 0))
+            except VintedError as e:
+                last_err = e
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            try:
+                r = self.session.get(url, timeout=20)
+                self._log(f"GET {url} -> HTTP {r.status_code}")
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                    except Exception as e:
+                        raise VintedError(f"profil non-JSON ({e})", status=200,
+                                          body=r.text[:300])
+                    return self._parse_feedback((data or {}).get("user") or {})
+                if r.status_code in (401, 403):
+                    last_err = VintedError(f"profil vendeur bloqué (HTTP {r.status_code})",
+                                           status=r.status_code, body=r.text[:300])
+                    self._cookie_ok = False
+                elif r.status_code == 429:
+                    last_err = VintedError("trop de requêtes (HTTP 429)", status=429)
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                elif r.status_code == 404:
+                    raise VintedError("profil vendeur introuvable", status=404)
+                else:
+                    last_err = VintedError(f"profil vendeur : HTTP {r.status_code}",
+                                           status=r.status_code, body=r.text[:300])
+                time.sleep(1.5 * (attempt + 1))
+            except VintedError as e:
+                if e.status in (200, 404):
+                    raise
+                last_err = e
+            except Exception as e:
+                last_err = VintedError(f"erreur réseau: {e}")
+                time.sleep(1.5 * (attempt + 1))
+        raise last_err or VintedError("lecture du profil vendeur sans détail")
+
     def _normalize(self, item):
         price = 0
         p = item.get("price")
@@ -238,8 +320,12 @@ class VintedClient:
         brand = item.get("brand_title") or ""
         url = item.get("url") or ""
         title = item.get("title") or ""
+        user = item.get("user") if isinstance(item.get("user"), dict) else {}
 
         return {
+            "id": item.get("id"),
+            "vendeur_id": user.get("id"),
+            "vendeur_pseudo": user.get("login"),
             "subject": title,
             "price": int(round(price)),
             "url": url,

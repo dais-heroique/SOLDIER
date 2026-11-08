@@ -1,0 +1,68 @@
+name: RAM Sniper (scan planifié)
+
+# Un passage toutes les ~10 minutes : scan Vinted + Leboncoin, filtre vendeur
+# (≥ 1 avis), notifications Telegram. Gratuit sur un dépôt PUBLIC.
+#
+# AVANT d'activer : lance « Test réseau » et vérifie qu'il est vert.
+# Secrets à créer : Settings → Secrets and variables → Actions
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (obligatoires)
+#   GEMINI_API_KEY                         (facultatif : analyse des photos)
+#   SNIPER_PROXY_URL                       (facultatif : proxy résidentiel)
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"     # GitHub peut retarder ou sauter quelques passages
+  workflow_dispatch:
+
+concurrency:
+  group: ram-sniper
+  cancel-in-progress: false    # jamais deux passages en parallèle (double requêtes)
+
+permissions:
+  contents: read
+  actions: write               # pour garder le planificateur actif (voir dernière étape)
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SNIPER_PROXY_URL: ${{ secrets.SNIPER_PROXY_URL }}
+      SNIPER_MIN_REVIEWS: "1"  # nombre d'avis minimum du vendeur (0 = désactivé)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # La base (annonces déjà vues, stock, quotas) est un fichier SQLite :
+      # on la restaure depuis le cache du passage précédent, puis on la
+      # re-sauvegarde sous une nouvelle clé à la fin du job.
+      - name: Restaurer la base
+        uses: actions/cache@v4
+        with:
+          path: soldier.db
+          key: soldier-db-${{ github.run_id }}
+          restore-keys: soldier-db-
+
+      - name: Références de prix (idempotent)
+        run: python ram_sniper.py --seed
+
+      - name: Scan
+        run: python ram_sniper.py --ci
+
+      # GitHub désactive les workflows planifiés d'un dépôt sans activité
+      # depuis 60 jours. Réactiver le workflow à chaque passage remet le
+      # compteur à zéro (au mieux : à vérifier de temps en temps).
+      - name: Garder le planificateur actif
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable ram-sniper.yml --repo "${{ github.repository }}" || true

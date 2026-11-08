@@ -27,6 +27,8 @@ import ram_config
 import ram_db
 import ram_parser
 import ram_scoring
+import reseau
+import vendeur_avis
 
 try:
     from vinted_client import VintedClient, VintedError
@@ -81,9 +83,13 @@ def _pause(intervalle):
 
 
 # ─────────────────────── TRAITEMENT COMMUN ───────────────────────
-def traiter_annonce(brut, source, mot_cle=None, cfg=None):
+def traiter_annonce(brut, source, mot_cle=None, cfg=None, verif_vendeur=None):
     """Chaîne complète pour une annonce brute : parsing → frais → pré-score →
-    écriture en base.
+    vérification du vendeur → écriture en base.
+
+    verif_vendeur : fonction(brut) → dict de vendeur_avis.evaluer(). Appelée
+    UNIQUEMENT pour une annonce nouvelle qui a survécu aux exclusions de
+    périmètre : c'est ce qui limite les requêtes de profil au strict minimum.
 
     Retourne un dict de résultat :
         {annonce, analyse, pre, nouvelle, notifiable, a_analyser}
@@ -166,6 +172,35 @@ def traiter_annonce(brut, source, mot_cle=None, cfg=None):
         return {"annonce": annonce, "analyse": analyse, "pre": pre, "nouvelle": True,
                 "notifiable": False, "a_analyser": False}
 
+    if verif_vendeur is not None:
+        v = verif_vendeur(brut) or {}
+        if not v.get("ok", True) and v.get("transitoire"):
+            # Profil illisible pour une raison passagère (403, 429, réseau) :
+            # on n'écrit PAS un rejet définitif. L'annonce est oubliée et
+            # sera revue comme nouvelle au prochain scan.
+            ram_db.supprimer_annonce(annonce_id)
+            pre = dict(pre, exclusion="vendeur_inconnu", rejet_motif=v.get("motif"))
+            return {"annonce": annonce, "analyse": analyse, "pre": pre,
+                    "nouvelle": False, "notifiable": False, "a_analyser": False}
+
+        maj_v = {"vendeur_avis": v.get("avis")}
+        if v.get("note") is not None and annonce.get("vendeur_note") is None:
+            maj_v["vendeur_note"] = v["note"]
+        if v.get("pseudo") and not annonce.get("vendeur_pseudo"):
+            maj_v["vendeur_pseudo"] = v["pseudo"]
+        if not v.get("ok", True):
+            maj_v.update({"statut": "rejete", "statut_verif": "rejete",
+                          "exclusion": "vendeur_sans_avis",
+                          "rejet_motif": v.get("motif")})
+        ram_db.maj_annonce(annonce_id, maj_v)
+        annonce.update(maj_v)
+        if not v.get("ok", True):
+            ram_db.journaliser("auto_rejet", annonce, motif=v.get("motif"),
+                               decide_par="auto")
+            pre = dict(pre, exclusion="vendeur_sans_avis", rejet_motif=v.get("motif"))
+            return {"annonce": annonce, "analyse": analyse, "pre": pre,
+                    "nouvelle": True, "notifiable": False, "a_analyser": False}
+
     seuil_notif = float(cfg.val("scoring.seuil_notification", 65))
     seuil_vision = float(cfg.val("scoring.seuil_vision", 55))
     score = pre["pre_score"]
@@ -195,6 +230,7 @@ class ScraperVinted:
         self.quarantaine = Quarantaine(
             self.cfg.val("sources.vinted.backoff_429_s", [60, 120, 300, 600]))
         self._dernier_passage = {}
+        self.echecs_consecutifs = 0     # alimente le disjoncteur de worker_scraping
 
     def _connecter(self):
         if self.client is None:
@@ -224,6 +260,7 @@ class ScraperVinted:
         try:
             items = client.search(search_text=mot_cle) or []
         except VintedError as e:
+            self.echecs_consecutifs += 1
             statut = getattr(e, "status", None)
             if statut in (429, 403, 401):
                 delai = self.quarantaine.echec(mot_cle)
@@ -235,22 +272,29 @@ class ScraperVinted:
                 ram_db.maj_scan_stat(self.source, mot_cle, requetes=1, erreurs=1)
             return []
         except Exception as e:
+            self.echecs_consecutifs += 1
             print(f"[vinted] « {mot_cle} » erreur inattendue : {e}")
             ram_db.maj_scan_stat(self.source, mot_cle, requetes=1, erreurs=1)
             return []
 
         self.quarantaine.succes(mot_cle)
+        self.echecs_consecutifs = 0
         resultats = []
         nouveaux = 0
         for item in items[:limite]:
             brut = self._normaliser(item)
-            r = traiter_annonce(brut, self.source, mot_cle, self.cfg)
+            r = traiter_annonce(brut, self.source, mot_cle, self.cfg,
+                                verif_vendeur=self._verif_vendeur)
             if r:
                 resultats.append(r)
                 nouveaux += int(r["nouvelle"])
         ram_db.maj_scan_stat(self.source, mot_cle, requetes=1,
                              resultats=len(items), nouveaux=nouveaux)
         return resultats
+
+    def _verif_vendeur(self, brut):
+        return vendeur_avis.evaluer("vinted", self.client, brut.get("vendeur_id"),
+                                    self.cfg)
 
     @staticmethod
     def _normaliser(item):
@@ -269,7 +313,8 @@ class ScraperVinted:
             "prix": item.get("price"), "photos": photos,
             "publie_le": item.get("posted_ts"),
             "source_id": item.get("id"),
-            "vendeur_pseudo": item.get("vendeur") or item.get("user_login"),
+            "vendeur_id": item.get("vendeur_id"),
+            "vendeur_pseudo": item.get("vendeur_pseudo") or item.get("vendeur"),
             "vendeur_note": item.get("vendeur_note"),
             "vendeur_ventes": item.get("vendeur_ventes"),
             "localisation": "Vinted",
@@ -295,12 +340,13 @@ class ScraperLeboncoin:
         self.quarantaine = Quarantaine(
             self.cfg.val("sources.leboncoin.backoff_429_s", [120, 300, 900, 1800]))
         self._dernier_passage = {}
+        self.echecs_consecutifs = 0
 
     def _connecter(self):
         if self.client is None:
             if not _HAS_LBC:
                 raise RuntimeError(f"module lbc indisponible : {_ERR_LBC}")
-            self.client = lbc.Client()
+            self.client = reseau.client_lbc()
         return self.client
 
     def mots_cles(self):
@@ -324,6 +370,7 @@ class ScraperLeboncoin:
                                 category=lbc.Category.ELECTRONIQUE_ACCESSOIRES_INFORMATIQUE)
             annonces = res.ads or []
         except Exception as e:
+            self.echecs_consecutifs += 1
             nom = type(e).__name__
             if "Datadome" in nom or "429" in str(e):
                 delai = self.quarantaine.echec(mot_cle)
@@ -335,6 +382,7 @@ class ScraperLeboncoin:
             return []
 
         self.quarantaine.succes(mot_cle)
+        self.echecs_consecutifs = 0
         departements = [str(d) for d in
                         (self.cfg.val("sources.leboncoin.departements", []) or [])]
         resultats = []
@@ -347,13 +395,18 @@ class ScraperLeboncoin:
                     brut["departement"] not in departements:
                 continue
             retenus += 1
-            r = traiter_annonce(brut, self.source, mot_cle, self.cfg)
+            r = traiter_annonce(brut, self.source, mot_cle, self.cfg,
+                                verif_vendeur=self._verif_vendeur)
             if r:
                 resultats.append(r)
                 nouveaux += int(r["nouvelle"])
         ram_db.maj_scan_stat(self.source, mot_cle, requetes=1,
                              resultats=retenus, nouveaux=nouveaux)
         return resultats
+
+    def _verif_vendeur(self, brut):
+        return vendeur_avis.evaluer("leboncoin", self.client, brut.get("vendeur_id"),
+                                    self.cfg)
 
     @staticmethod
     def _normaliser(ad):
@@ -387,6 +440,7 @@ class ScraperLeboncoin:
             "description": corps, "prix": getattr(ad, "price", 0),
             "photos": photos, "publie_le": publie_ts,
             "source_id": getattr(ad, "list_id", None) or getattr(ad, "id", None),
+            "vendeur_id": getattr(ad, "_user_id", None),
             "localisation": ville, "code_postal": code_postal,
             "departement": departement,
             "main_propre": _lbc_main_propre(getattr(ad, "subject", ""), corps),
