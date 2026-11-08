@@ -3,15 +3,20 @@ name: RAM Sniper (scan planifié)
 # Un passage toutes les ~10 minutes : scan Vinted + Leboncoin, filtre vendeur
 # (≥ 1 avis), notifications Telegram. Gratuit sur un dépôt PUBLIC.
 #
-# AVANT d'activer : lance « Test réseau » et vérifie qu'il est vert.
-# Secrets à créer : Settings → Secrets and variables → Actions
-#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (obligatoires)
-#   GEMINI_API_KEY                         (facultatif : analyse des photos)
-#   SNIPER_PROXY_URL                       (facultatif : proxy résidentiel)
+# Anti-blocage (README §10) : chaque requête bloquée repart aussitôt par la
+# sortie réseau suivante — direct → maison (Tailscale) → WARP → proxys — et
+# l'état des sorties est gardé d'un passage à l'autre.
+#
+# Secrets (Settings → Secrets and variables → Actions) :
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   obligatoires
+#   GEMINI_API_KEY                         facultatif : analyse des photos
+#   TS_AUTHKEY, TS_EXIT_NODE               facultatif : sortie maison (gratuit)
+#   SNIPER_PROXY_URLS                      facultatif : proxys payants
+# Variable (onglet Variables) : SNIPER_WARP = auto (défaut) | toujours | jamais
 
 on:
   schedule:
-    - cron: "*/10 * * * *"     # GitHub peut retarder ou sauter quelques passages
+    - cron: "*/10 * * * *"     # GitHub peut retarder ou sauter des passages (README §10)
   workflow_dispatch:
 
 concurrency:
@@ -20,17 +25,22 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write               # pour garder le planificateur actif (voir dernière étape)
+  actions: write               # pour garder le planificateur actif (dernière étape)
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
+      TZ: Europe/Paris
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+      TS_EXIT_NODE: ${{ secrets.TS_EXIT_NODE }}
+      SNIPER_PROXY_URLS: ${{ secrets.SNIPER_PROXY_URLS }}
       SNIPER_PROXY_URL: ${{ secrets.SNIPER_PROXY_URL }}
+      SNIPER_WARP: ${{ vars.SNIPER_WARP || 'auto' }}
       SNIPER_MIN_REVIEWS: "1"  # nombre d'avis minimum du vendeur (0 = désactivé)
     steps:
       - uses: actions/checkout@v4
@@ -42,15 +52,22 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # La base (annonces déjà vues, stock, quotas) est un fichier SQLite :
-      # on la restaure depuis le cache du passage précédent, puis on la
-      # re-sauvegarde sous une nouvelle clé à la fin du job.
-      - name: Restaurer la base
-        uses: actions/cache@v4
+      # La base (annonces vues, stock, quotas) et l'état des sorties réseau
+      # passent d'un passage à l'autre par le cache GitHub. Restauration et
+      # sauvegarde séparées : la sauvegarde a lieu MÊME si le passage échoue,
+      # sinon le bot oublierait quelles sorties sont bloquées.
+      - name: Restaurer la base et l'état réseau
+        uses: actions/cache/restore@v4
         with:
-          path: soldier.db
-          key: soldier-db-${{ github.run_id }}
+          path: |
+            soldier.db
+            .sorties_etat.json
+          key: soldier-db-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: soldier-db-
+
+      - name: Sorties réseau de secours
+        run: bash outils/sorties_secours.sh
+        continue-on-error: true
 
       - name: Références de prix (idempotent)
         run: python ram_sniper.py --seed
@@ -58,9 +75,18 @@ jobs:
       - name: Scan
         run: python ram_sniper.py --ci
 
+      - name: Sauvegarder la base et l'état réseau
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            soldier.db
+            .sorties_etat.json
+          key: soldier-db-${{ github.run_id }}-${{ github.run_attempt }}
+
       # GitHub désactive les workflows planifiés d'un dépôt sans activité
       # depuis 60 jours. Réactiver le workflow à chaque passage remet le
-      # compteur à zéro (au mieux : à vérifier de temps en temps).
+      # compteur à zéro ; le résumé Telegram quotidien sert de contrôle.
       - name: Garder le planificateur actif
         if: always()
         env:

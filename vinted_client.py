@@ -38,9 +38,39 @@ except Exception:
     import requests as cffi
     _HAS_CFFI = False
 
-# Versions Chrome connues pour bien fonctionner avec curl_cffi (JA3 à jour).
-# Si Datadome évolue et bloque une version, en essayer une autre.
-IMPERSONATE_CANDIDATES = ["chrome124", "chrome123", "chrome120", "chrome119"]
+# Empreintes TLS de navigateur essayées dans l'ordre. chrome124 d'abord (celle
+# qui a fonctionné jusqu'ici), puis les versions les plus récentes que la
+# version installée de curl_cffi sait imiter — Chrome, Safari, Firefox — pour
+# que l'empreinte ne vieillisse pas avec le code. Une version inconnue de
+# curl_cffi est simplement écartée (pas d'erreur sur une vieille install).
+_ANCIENNES = ["chrome124", "chrome123", "chrome120", "chrome119"]
+
+
+def _candidats_impersonation():
+    try:
+        from curl_cffi.requests import BrowserType
+        dispo = {b.value for b in BrowserType}
+    except Exception:
+        return list(_ANCIENNES)
+
+    def plus_recent(motif, n=1):
+        versions = []
+        for v in dispo:
+            m = re.fullmatch(motif, v)
+            if m:
+                versions.append((int(m.group(1)), v))
+        return [v for _, v in sorted(versions, reverse=True)[:n]]
+
+    liste = (["chrome124"] + plus_recent(r"chrome(\d+)a?", 2)
+             + plus_recent(r"safari(\d{3})") + plus_recent(r"firefox(\d+)") + ["chrome120"])
+    vus = []
+    for v in liste:
+        if v in dispo and v not in vus:
+            vus.append(v)
+    return vus or list(_ANCIENNES)
+
+
+IMPERSONATE_CANDIDATES = _candidats_impersonation()
 
 
 class VintedError(Exception):
@@ -52,12 +82,15 @@ class VintedError(Exception):
 
 
 class VintedClient:
-    def __init__(self, country=None, impersonate=None, verbose=False):
+    def __init__(self, country=None, impersonate=None, verbose=False, proxy=reseau.DEFAUT):
         """
         country: code pays (ex "FR", "DE"...) — défaut: SNIPER_COUNTRY ou FR.
         impersonate: force une version curl_cffi précise (sinon essaie la liste).
         verbose: affiche le détail de chaque requête (utile pour diagnostiquer).
+        proxy: URL de proxy, None pour la connexion directe ; non fourni =
+               ancien réglage SNIPER_PROXY_URL (voir reseau.py).
         """
+        self._proxy = reseau.proxy_url() if proxy is reseau.DEFAUT else proxy
         cfg = get_country_config(country)
         self.country = cfg["code"]
         self.domain = cfg["vinted_domain"]
@@ -90,8 +123,8 @@ class VintedClient:
         self._appliquer_proxy()
 
     def _appliquer_proxy(self):
-        """Proxy sortant optionnel (SNIPER_PROXY_URL) — voir reseau.py."""
-        px = reseau.proxies_http()
+        """Proxy sortant de cette instance (voir reseau.py)."""
+        px = reseau.proxies_http(self._proxy)
         if px:
             self.session.proxies = px
 

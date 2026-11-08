@@ -12,6 +12,15 @@
 ci:
   mots_cles_par_source: 8       # tirés au hasard à chaque passage (rotation)
   budget_notifications_s: 240   # temps laissé à l'envoi Telegram après le scan
+  calibrage_annonces: 30        # calibrage quotidien borné (pas de rafale)
+  echec_si_bloque: false        # true = run rouge (e-mail GitHub) quand tout est bloqué
+
+# ─────────────────────────── ALERTES SYSTÈME ───────────────────────────
+# Le bot prévient sur Telegram quand Vinted/Leboncoin le bloquent partout,
+# quand ça repart, et quand une sortie de secours prend le relais.
+alertes:
+  cycles_avant_alerte: 2        # un raté isolé n'alerte pas
+  signe_de_vie_h: 24            # résumé quotidien silencieux (0 = désactivé)
 
 # ─────────────────────────── FILTRE VENDEUR ───────────────────────────
 # Un vendeur sans aucun avis est écarté (profil type de l'arnaque : compte
@@ -333,6 +342,7 @@ appariement:
 calibrage:
   actif: true
   heure_job: "04:30"            # job quotidien
+  pause_s: [2.0, 4.0]           # pause entre deux vérifications (jamais de rafale)
   fenetre_jours: 30             # ventes conclues sur 30 jours
   min_observations: 3           # en dessous, on ne recalibre pas (bruit)
   methode: mediane              # mediane | moyenne_tronquee

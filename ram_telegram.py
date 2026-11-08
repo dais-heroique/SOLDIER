@@ -428,6 +428,24 @@ def anti_spam_ok(cfg=None):
     return len(envois) < rafale
 
 
+def envoyer_texte(texte, cfg=None, silencieux=False, chat_id=None):
+    """Message système (alerte réseau, signe de vie). Lève TelegramError.
+    Retourne False si rien n'a été envoyé (Telegram désactivé, dry-run)."""
+    cfg = cfg or ram_config.get()
+    if not cfg.val("telegram.actif", True):
+        return False
+    if cfg.dry_run:
+        print(f"[dry-run] message système :\n{_sans_html(texte)}\n")
+        return False
+    chat_id = chat_id or ram_config.secret("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        raise TelegramError("TELEGRAM_CHAT_ID absent (.env)")
+    _appel("sendMessage", {"chat_id": chat_id, "text": texte, "parse_mode": "HTML",
+                           "disable_web_page_preview": True,
+                           "disable_notification": bool(silencieux)})
+    return True
+
+
 def notifier_etape1(annonce, pre, cfg=None, chat_id=None):
     """Envoie la notification instantanée. Retourne l'id de ram_notification,
     ou None si non envoyée (dry-run, anti-spam, Telegram désactivé)."""

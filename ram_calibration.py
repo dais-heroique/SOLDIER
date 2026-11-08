@@ -21,6 +21,7 @@ barrettes vendu 15 € pièce ne doit pas écraser une référence à 115 €.
 """
 
 import statistics
+import random
 import time
 from datetime import date
 
@@ -48,7 +49,8 @@ except Exception:                                       # pragma: no cover
 
 
 # ─────────────────────── COLLECTE ───────────────────────
-def collecter_vinted_vendus(mots_cles=None, cfg=None, verbose=True):
+def collecter_vinted_vendus(mots_cles=None, cfg=None, verbose=True, client=None,
+                            limite_annonces=200):
     """Vinted n'expose pas d'API « articles vendus » exploitable directement.
     On collecte donc les annonces vues et on considère comme vendue toute
     annonce déjà connue qui a disparu du catalogue : c'est le meilleur proxy
@@ -71,11 +73,16 @@ def collecter_vinted_vendus(mots_cles=None, cfg=None, verbose=True):
             SELECT * FROM ram_annonce
             WHERE source='vinted' AND encore_en_ligne=1 AND ref_id IS NOT NULL
               AND detecte_le > ? AND vue_le < ?
-            ORDER BY vue_le ASC LIMIT 200
-        """, (limite, time.time() - 2 * 86400)).fetchall()]
+            ORDER BY vue_le ASC LIMIT ?
+        """, (limite, time.time() - 2 * 86400, int(limite_annonces))).fetchall()]
 
-    client = VintedClient(country="FR")
-    for annonce in candidates:
+    client = client or VintedClient(country="FR")
+    # Pause entre deux vérifications : 200 recherches en rafale à 4 h 30,
+    # c'est exactement le motif qui fait bloquer une IP par Datadome.
+    pause = cfg.val("calibrage.pause_s", [2.0, 4.0])
+    for i, annonce in enumerate(candidates):
+        if i and isinstance(pause, (list, tuple)) and len(pause) == 2:
+            time.sleep(random.uniform(float(pause[0]), float(pause[1])))
         try:
             resultats = client.search(search_text=(annonce.get("pn_detecte")
                                                    or annonce.get("titre", ""))[:60])

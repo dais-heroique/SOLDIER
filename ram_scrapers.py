@@ -213,8 +213,67 @@ def traiter_annonce(brut, source, mot_cle=None, cfg=None, verif_vendeur=None):
     }
 
 
+# ─────────────────────── BASCULE DE SORTIE RÉSEAU ───────────────────────
+def _bloque_vinted(e):
+    """L'échec vient-il de la SORTIE (IP bloquée, proxy en panne) plutôt que
+    de Vinted lui-même ? Seuls ces cas justifient de changer de sortie."""
+    statut = getattr(e, "status", None)
+    if statut in (401, 403, 429) or statut is None:
+        return True                 # blocage, limite par IP, ou réseau/proxy injoignable
+    # Page de défi anti-bot servie en 200 à la place du JSON
+    return statut == 200 and "non-JSON" in str(e)
+
+
+def _bloque_lbc(e):
+    nom = type(e).__name__
+    if any(m in nom for m in ("NotFound", "InvalidValue")):
+        return False
+    if any(m in nom for m in ("Datadome", "Request", "Timeout", "Proxy", "Connection",
+                              "Curl", "SSL", "Parse")):
+        return True                 # Parse : page de défi au lieu du JSON
+    return "403" in str(e) or "429" in str(e)
+
+
+class _AvecBascule:
+    """Recherche qui change de sortie réseau dès que la sortie courante est
+    bloquée, dans la MÊME requête : un blocage ne coûte pas le mot-clé.
+    Voir reseau.py pour la chaîne de sorties et leur mise à l'écart."""
+
+    sortie = None
+
+    def _sortie_courante(self):
+        # Client injecté de l'extérieur (tests, ancien code) : sortie directe.
+        return self.sortie or reseau.Sortie("direct", "direct", None)
+
+    def _avec_bascule(self, appel, est_blocage, etiquette):
+        essayees, derniere = [], None
+        for _ in range(len(reseau.sorties())):
+            try:
+                client = self._connecter(exclure=essayees)
+                resultat = appel(client)
+            except reseau.SortiesEpuisees:
+                if derniere is not None:
+                    raise derniere
+                raise
+            except Exception as e:
+                if not est_blocage(e):
+                    raise
+                sortie = self._sortie_courante()
+                delai = reseau.signaler_echec(self.source, sortie, f"{type(e).__name__}: {e}")
+                print(f"[{etiquette}] sortie « {sortie.nom} » bloquée "
+                      f"({reseau.masquer(e)[:90]}) → à l'écart {delai // 60} min, sortie suivante")
+                essayees.append(sortie.nom)
+                self.client = None
+                self.sortie = None
+                derniere = e
+                continue
+            reseau.signaler_succes(self.source, self._sortie_courante())
+            return resultat
+        raise derniere
+
+
 # ─────────────────────── VINTED ───────────────────────
-class ScraperVinted:
+class ScraperVinted(_AvecBascule):
     """Priorité 1 : vendeurs peu informés, achat immédiat, meilleur terrain.
 
     Frais à intégrer systématiquement : protection acheteur ≈ 5 % + 0,70 €,
@@ -232,11 +291,15 @@ class ScraperVinted:
         self._dernier_passage = {}
         self.echecs_consecutifs = 0     # alimente le disjoncteur de worker_scraping
 
-    def _connecter(self):
+    def _connecter(self, exclure=()):
         if self.client is None:
             if not _HAS_VINTED:
-                raise VintedError(f"client Vinted indisponible : {_ERR_VINTED}")
-            self.client = VintedClient(country="FR", verbose=self.verbose)
+                raise VintedError(f"client Vinted indisponible : {_ERR_VINTED}", status=-1)
+            sortie = reseau.choisir(self.source, exclure)
+            if sortie is None:
+                raise reseau.SortiesEpuisees(self.source)
+            self.sortie = sortie
+            self.client = VintedClient(country="FR", verbose=self.verbose, proxy=sortie.url)
         return self.client
 
     def mots_cles(self):
@@ -253,12 +316,20 @@ class ScraperVinted:
         """Retourne la liste des résultats de traiter_annonce()."""
         if self.quarantaine.bloque(mot_cle):
             return []
-        client = self._connecter()
         self._dernier_passage[mot_cle] = time.time()
         limite = int(self.cfg.val("sources.vinted.max_resultats_par_requete", 20))
 
         try:
-            items = client.search(search_text=mot_cle) or []
+            # 2 tentatives par sortie (au lieu de 3) : quand une IP est
+            # bloquée, insister ne sert à rien, la sortie suivante si.
+            items = self._avec_bascule(
+                lambda c: c.search(search_text=mot_cle, max_retries=2) or [],
+                _bloque_vinted, "vinted")
+        except reseau.SortiesEpuisees:
+            self.echecs_consecutifs += 1
+            print(f"[vinted] « {mot_cle} » : toutes les sorties réseau sont à l'écart")
+            ram_db.maj_scan_stat(self.source, mot_cle, erreurs=1)
+            return []
         except VintedError as e:
             self.echecs_consecutifs += 1
             statut = getattr(e, "status", None)
@@ -322,7 +393,7 @@ class ScraperVinted:
 
 
 # ─────────────────────── LEBONCOIN ───────────────────────
-class ScraperLeboncoin:
+class ScraperLeboncoin(_AvecBascule):
     """Priorité 2 : vendeurs mieux informés, MAIS retrait en main propre = 0
     frais et 0 risque de casse.
 
@@ -342,11 +413,18 @@ class ScraperLeboncoin:
         self._dernier_passage = {}
         self.echecs_consecutifs = 0
 
-    def _connecter(self):
+    def _connecter(self, exclure=()):
         if self.client is None:
             if not _HAS_LBC:
                 raise RuntimeError(f"module lbc indisponible : {_ERR_LBC}")
-            self.client = reseau.client_lbc()
+            sortie = reseau.choisir(self.source, exclure)
+            if sortie is None:
+                raise reseau.SortiesEpuisees(self.source)
+            self.sortie = sortie
+            # Le constructeur fait déjà une requête : s'il lève, _avec_bascule
+            # classe l'erreur et passe à la sortie suivante. max_retries=2 :
+            # lbc réessaie chaque 403, inutile de le laisser insister 5 fois.
+            self.client = reseau.client_lbc(sortie, max_retries=2)
         return self.client
 
     def mots_cles(self):
@@ -360,15 +438,22 @@ class ScraperLeboncoin:
     def scanner_mot_cle(self, mot_cle):
         if self.quarantaine.bloque(mot_cle):
             return []
-        client = self._connecter()
         self._dernier_passage[mot_cle] = time.time()
         limite = int(self.cfg.val("sources.leboncoin.max_resultats_par_requete", 35))
 
-        try:
+        def recherche(client):
             res = client.search(text=mot_cle, page=1, limit=limite,
                                 sort=lbc.Sort.NEWEST, ad_type=lbc.AdType.OFFER,
                                 category=lbc.Category.ELECTRONIQUE_ACCESSOIRES_INFORMATIQUE)
-            annonces = res.ads or []
+            return res.ads or []
+
+        try:
+            annonces = self._avec_bascule(recherche, _bloque_lbc, "lbc")
+        except reseau.SortiesEpuisees:
+            self.echecs_consecutifs += 1
+            print(f"[lbc] « {mot_cle} » : toutes les sorties réseau sont à l'écart")
+            ram_db.maj_scan_stat(self.source, mot_cle, erreurs=1)
+            return []
         except Exception as e:
             self.echecs_consecutifs += 1
             nom = type(e).__name__
