@@ -19,6 +19,11 @@ import traceback
 # Base temporaire AVANT tout import du module (ram_db lit DB_FILE à l'import).
 _TMP = tempfile.mkdtemp(prefix="ram_sniper_test_")
 os.environ["RAM_DRY_RUN"] = "1"
+os.environ["SNIPER_ETAT_SORTIES"] = os.path.join(_TMP, "sorties.json")
+for _var in ("SNIPER_PROXY_URL", "SNIPER_PROXY_URLS", "SNIPER_PROXY_MAISON",
+             "SNIPER_PROXY_WARP", "SNIPER_DIRECT", "SNIPER_ORDRE_SORTIES",
+             "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+    os.environ.pop(_var, None)
 
 import ram_db                                                     # noqa: E402
 ram_db.DB_FILE = os.path.join(_TMP, "test.db")
@@ -1604,6 +1609,305 @@ def _():
         assert role == "principal"
     finally:
         del os.environ["RAM_SANS_ELECTION"]
+
+
+# ═══════════════════════════════════════════════════════════
+section("Anti-blocage : chaîne de sorties réseau")
+
+import reseau                                                     # noqa: E402
+
+
+class _Env:
+    """Variables d'environnement temporaires + état des sorties remis à zéro."""
+    def __init__(self, **variables):
+        self.variables = variables
+        self.avant = {}
+
+    def __enter__(self):
+        for k, v in self.variables.items():
+            self.avant[k] = os.environ.get(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        import uuid
+        self.fichier = os.path.join(_TMP, f"sorties_{uuid.uuid4().hex}.json")
+        self.avant["SNIPER_ETAT_SORTIES"] = os.environ.get("SNIPER_ETAT_SORTIES")
+        os.environ["SNIPER_ETAT_SORTIES"] = self.fichier
+        reseau.recharger()
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self.avant.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        reseau.recharger()
+
+
+_MAISON = "socks5h://127.0.0.1:1055"
+_WARP = "socks5h://127.0.0.1:40000"
+
+
+@test("sorties : direct seul par défaut ; maison, WARP puis proxys dans cet ordre")
+def _():
+    with _Env():
+        assert [x.nom for x in reseau.sorties()] == ["direct"]
+    with _Env(SNIPER_PROXY_WARP=_WARP, SNIPER_PROXY_MAISON=_MAISON,
+              SNIPER_PROXY_URLS="http://a:1, http://b:2", SNIPER_PROXY_URL="http://a:1"):
+        assert [x.nom for x in reseau.sorties()] == \
+            ["direct", "maison", "warp", "proxy1", "proxy2"], "doublon ou ordre faux"
+    with _Env(SNIPER_PROXY_MAISON=_MAISON, SNIPER_ORDRE_SORTIES="maison,direct"):
+        assert [x.nom for x in reseau.sorties()][:2] == ["maison", "direct"]
+    with _Env(SNIPER_DIRECT="0"):
+        assert [x.nom for x in reseau.sorties()] == ["direct"], \
+            "sans aucune autre sortie, on garde le direct plutôt que rien"
+
+
+@test("sortie bloquée : mise à l'écart de plus en plus longue, la suivante prend le relais")
+def _():
+    with _Env(SNIPER_PROXY_WARP=_WARP):
+        direct, warp = reseau.sorties()
+        assert reseau.choisir("vinted") == direct
+        d1 = reseau.signaler_echec("vinted", direct, "HTTP 403")
+        assert reseau.choisir("vinted") == warp
+        reseau.recharger()                                  # nouveau passage, même fichier
+        assert reseau.choisir("vinted") == warp, "l'état doit survivre au redémarrage"
+        d2 = reseau.signaler_echec("vinted", direct, "HTTP 403")
+        assert d2 > d1, "la mise à l'écart doit s'allonger"
+        assert reseau.choisir("leboncoin") == direct, "chaque source a son propre état"
+        reseau.signaler_succes("vinted", direct)
+        assert reseau.choisir("vinted") == direct, "un succès lève la mise à l'écart"
+
+
+@test("tout est bloqué : une seule sonde, puis on n'insiste plus")
+def _():
+    with _Env(SNIPER_PROXY_WARP=_WARP):
+        for x in reseau.sorties():
+            reseau.signaler_echec("vinted", x, "403")
+        sonde = reseau.choisir("vinted")
+        assert sonde is not None, "il faut une sonde pour détecter le déblocage"
+        assert reseau.choisir("vinted") is None, "pas de deuxième sonde dans la foulée"
+
+
+@test("état abîmé ou absent : aucun plantage ; identifiants de proxy jamais dans les logs")
+def _():
+    with _Env() as env:
+        with open(env.fichier, "w") as f:
+            f.write("{pas du json")
+        reseau.recharger()
+        assert reseau.choisir("vinted").nom == "direct"
+        reseau.signaler_echec("vinted", reseau.sorties()[0], "x")
+    assert "secret" not in reseau.masquer("échec via http://moi:secret@hote:8080")
+
+
+@test("alertes : « bloqué » après 2 cycles ratés, « rétabli » ensuite, secours annoncé une fois")
+def _():
+    with _Env(SNIPER_PROXY_WARP=_WARP):
+        direct, warp = reseau.sorties()
+        for attendu in (None, ("bloque", None)):
+            reseau.debut_cycle()
+            reseau.signaler_echec("vinted", direct, "403")
+            reseau.signaler_echec("vinted", warp, "403")
+            assert reseau.evaluer_alertes("vinted") == attendu
+        reseau.debut_cycle()
+        reseau.signaler_succes("vinted", warp)
+        assert reseau.evaluer_alertes("vinted") == ("retabli", "warp")
+    with _Env(SNIPER_PROXY_WARP=_WARP):
+        direct, warp = reseau.sorties()
+        reseau.debut_cycle()
+        reseau.signaler_succes("vinted", direct)
+        assert reseau.evaluer_alertes("vinted") is None
+        reseau.debut_cycle()
+        reseau.signaler_echec("vinted", direct, "403")
+        reseau.signaler_succes("vinted", warp)
+        assert reseau.evaluer_alertes("vinted") == ("secours", "warp")
+        reseau.debut_cycle()
+        reseau.signaler_succes("vinted", direct)
+        reseau.evaluer_alertes("vinted")
+        reseau.debut_cycle()
+        reseau.signaler_succes("vinted", warp)
+        assert reseau.evaluer_alertes("vinted") is None, "pas de spam si le direct va et vient"
+
+
+@test("besoin de secours : vrai seulement si le direct a été bloqué récemment")
+def _():
+    with _Env():
+        assert not reseau.besoin_secours()
+        reseau.signaler_echec("leboncoin", reseau.sorties()[0], "Datadome")
+        assert reseau.besoin_secours()
+
+
+class _VintedSelonSortie:
+    """Faux client Vinted : bloqué en direct, fonctionne via WARP."""
+    appels = []
+
+    def __init__(self, country=None, verbose=False, proxy=None, **kw):
+        self.proxy = proxy
+
+    def search(self, search_text=None, max_retries=3, **kw):
+        _VintedSelonSortie.appels.append(self.proxy)
+        if self.proxy is None:
+            raise vinted_client.VintedError("bloqué par Datadome (HTTP 403)", status=403)
+        return [{"id": 9001, "vendeur_id": 77, "subject": "Kit DDR4 32Go Corsair Vengeance 3200",
+                 "description": "CMK32GX4M2E3200C16", "price": 40,
+                 "url": f"https://www.vinted.fr/items/bascule-{len(_VintedSelonSortie.appels)}",
+                 "image": "https://x/1.jpg"}]
+
+    def get_user_feedback(self, uid):
+        return {"avis": 12, "note": 4.9, "pseudo": "ok"}
+
+
+@test("Vinted : 403 en direct → même mot-clé repris via WARP, sans le perdre")
+def _():
+    orig = ram_scrapers.VintedClient
+    ram_scrapers.VintedClient = _VintedSelonSortie
+    vendeur_avis.vider_cache()
+    try:
+        with _Env(SNIPER_PROXY_WARP=_WARP):
+            _VintedSelonSortie.appels = []
+            sc = ram_scrapers.ScraperVinted(ram_config.get())
+            resultats = sc.scanner_mot_cle("ddr4 32go")
+            assert resultats, "l'annonce doit être trouvée via la sortie de secours"
+            assert _VintedSelonSortie.appels == [None, _WARP], _VintedSelonSortie.appels
+            assert sc.echecs_consecutifs == 0
+            reseau.recharger()                       # passage suivant (nouveau processus)
+            _VintedSelonSortie.appels = []
+            ram_scrapers.ScraperVinted(ram_config.get()).scanner_mot_cle("kit ddr4")
+            assert _VintedSelonSortie.appels == [_WARP], \
+                "le passage suivant ne doit pas re-griller une requête sur l'IP bloquée"
+    finally:
+        ram_scrapers.VintedClient = orig
+
+
+@test("Vinted : une erreur qui ne vient pas de l'IP (HTTP 500) ne change pas de sortie")
+def _():
+    class _Erreur500(_VintedSelonSortie):
+        def search(self, **kw):
+            _VintedSelonSortie.appels.append(self.proxy)
+            raise vinted_client.VintedError("HTTP 500 inattendu", status=500)
+
+    orig = ram_scrapers.VintedClient
+    ram_scrapers.VintedClient = _Erreur500
+    try:
+        with _Env(SNIPER_PROXY_WARP=_WARP):
+            _VintedSelonSortie.appels = []
+            ram_scrapers.ScraperVinted(ram_config.get()).scanner_mot_cle("ddr4")
+            assert _VintedSelonSortie.appels == [None]
+            assert not reseau.bloquee("vinted", reseau.sorties()[0])
+    finally:
+        ram_scrapers.VintedClient = orig
+
+
+@test("Leboncoin : Datadome dès la connexion → bascule sur la sortie maison")
+def _():
+    from types import SimpleNamespace as NS
+
+    class DatadomeError(Exception):
+        pass
+
+    connexions = []
+
+    def faux_client(sortie, **kw):
+        connexions.append(sortie.nom)
+        if sortie.directe:
+            raise DatadomeError("Access blocked by Datadome")
+        return NS(search=lambda **kw: NS(ads=[]), get_user=lambda uid: None)
+
+    faux_lbc = NS(Sort=NS(NEWEST=1), AdType=NS(OFFER=1),
+                  Category=NS(ELECTRONIQUE_ACCESSOIRES_INFORMATIQUE=1))
+    sauvegarde = (ram_scrapers._HAS_LBC, getattr(ram_scrapers, "lbc", None), reseau.client_lbc)
+    ram_scrapers._HAS_LBC, ram_scrapers.lbc, reseau.client_lbc = True, faux_lbc, faux_client
+    try:
+        with _Env(SNIPER_PROXY_MAISON=_MAISON):
+            sc = ram_scrapers.ScraperLeboncoin(ram_config.get())
+            sc.scanner_mot_cle("ddr4")
+            assert connexions == ["direct", "maison"], connexions
+            assert sc.echecs_consecutifs == 0 and sc.sortie.nom == "maison"
+    finally:
+        ram_scrapers._HAS_LBC, ram_scrapers.lbc, reseau.client_lbc = sauvegarde
+
+
+@test("Vinted : quand toutes les sorties sont à l'écart, aucune requête n'est envoyée")
+def _():
+    orig = ram_scrapers.VintedClient
+    ram_scrapers.VintedClient = _VintedSelonSortie
+    try:
+        with _Env():
+            direct = reseau.sorties()[0]
+            reseau.signaler_echec("vinted", direct, "403")
+            reseau.choisir("vinted")                       # la sonde du passage est consommée
+            _VintedSelonSortie.appels = []
+            sc = ram_scrapers.ScraperVinted(ram_config.get())
+            assert sc.scanner_mot_cle("ddr4") == []
+            assert _VintedSelonSortie.appels == [] and sc.echecs_consecutifs == 1
+    finally:
+        ram_scrapers.VintedClient = orig
+
+
+@test("mode --ci : tout bloqué → vert si Telegram prévient, rouge (3) sinon")
+def _():
+    import ram_sniper
+
+    class _ToujoursBloque(_VintedSelonSortie):
+        def search(self, **kw):
+            raise vinted_client.VintedError("HTTP 403", status=403)
+
+    orig = ram_scrapers.VintedClient
+    orig_get, orig_pause = ram_config.get, ram_scrapers._pause
+    ram_scrapers.VintedClient = _ToujoursBloque
+    ram_scrapers._pause = lambda *a, **k: None
+    cfg = ram_config.Config({
+        "sources": {"vinted": {"actif": True, "mots_cles": ["ddr4", "kit ddr4"]},
+                    "leboncoin": {"actif": False}},
+        "ci": {"budget_notifications_s": 1}, "vision": {"actif": False},
+        "alertes": {"signe_de_vie_h": 0}, "calibrage": {"actif": False,
+                                                         "heure_job": "99:99"}})
+    ram_config.get = lambda force=False: cfg
+    try:
+        with _Env(SNIPER_PROXY_WARP=_WARP):
+            assert ram_sniper.executer_ci(cfg) == 3, "sans Telegram, le run rouge est le seul signal"
+        with _Env(SNIPER_PROXY_WARP=_WARP, TELEGRAM_BOT_TOKEN="x", TELEGRAM_CHAT_ID="1"):
+            assert ram_sniper.executer_ci(cfg) == 0, \
+                "avec Telegram : alerte sur le téléphone, pas un e-mail GitHub toutes les 10 min"
+    finally:
+        ram_scrapers.VintedClient = orig
+        ram_config.get, ram_scrapers._pause = orig_get, orig_pause
+
+
+@test("signe de vie : un message par jour, pas plus ; maintenance une fois par jour")
+def _():
+    import ram_sniper
+    cfg = ram_config.Config({"alertes": {"signe_de_vie_h": 24},
+                             "calibrage": {"actif": False, "heure_job": "00:00"}})
+    with _Env(TELEGRAM_BOT_TOKEN="x", TELEGRAM_CHAT_ID="1"):
+        assert ram_sniper.signe_de_vie(cfg, ["vinted"]) is True
+        assert ram_sniper.signe_de_vie(cfg, ["vinted"]) is False
+        texte = ram_sniper.message_signe_de_vie(["vinted", "leboncoin"])
+        assert "Vinted" in texte and "Leboncoin" in texte
+        assert ram_sniper.maintenance_quotidienne(cfg) is True
+        assert ram_sniper.maintenance_quotidienne(cfg) is False
+    with _Env():
+        assert ram_sniper.signe_de_vie(cfg, ["vinted"]) is False, "sans Telegram : rien"
+
+
+@test("messages d'alerte lisibles, et conseil adapté s'il n'y a qu'une sortie")
+def _():
+    import ram_sniper
+    with _Env():
+        assert "Tailscale" in ram_sniper.message_alerte("vinted", "bloque")
+    with _Env(SNIPER_PROXY_MAISON=_MAISON):
+        m = ram_sniper.message_alerte("leboncoin", "bloque")
+        assert "Leboncoin" in m and "maison" in m
+        assert "warp" in ram_sniper.message_alerte("vinted", "secours", "warp")
+
+
+@test("empreintes navigateur : la version qui marchait reste en tête, versions inconnues écartées")
+def _():
+    cands = vinted_client.IMPERSONATE_CANDIDATES
+    assert cands and cands[0] == "chrome124", cands
+    assert len(cands) == len(set(cands))
 
 
 # ═══════════════════════════════════════════════════════════

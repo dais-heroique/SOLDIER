@@ -34,3 +34,7 @@ desktop.ini
 .ram_sniper.lock
 ram_config.local.yaml
 .ram_sante.json
+
+# État des sorties réseau du bot (bascule automatique)
+.sorties_etat.json
+.sorties_*.tmp

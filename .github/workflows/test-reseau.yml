@@ -1,9 +1,9 @@
 name: Test réseau (Vinted + Leboncoin)
 
-# À lancer UNE fois à la main, avant d'activer le scan planifié :
-# onglet Actions → « Test réseau » → Run workflow.
-# Il dit si Vinted et Leboncoin répondent depuis les serveurs GitHub et si les
-# avis vendeurs sont bien lus. Rouge = IP bloquée (voir README §10).
+# Teste CHAQUE sortie réseau (direct, maison, WARP, proxys) sur Vinted et
+# Leboncoin, et vérifie que les avis vendeurs sont lus. À lancer à la main :
+# onglet Actions → « Test réseau » → Run workflow. Vert = au moins une sortie
+# fonctionne pour chaque site. Le tableau final dit lesquelles.
 
 on:
   workflow_dispatch:
@@ -14,9 +14,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
+      TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+      TS_EXIT_NODE: ${{ secrets.TS_EXIT_NODE }}
+      SNIPER_PROXY_URLS: ${{ secrets.SNIPER_PROXY_URLS }}
       SNIPER_PROXY_URL: ${{ secrets.SNIPER_PROXY_URL }}
+      SNIPER_WARP: toujours    # on teste toutes les sorties possibles
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,4 +28,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      - name: Sorties réseau de secours
+        run: bash outils/sorties_secours.sh
+        continue-on-error: true
       - run: python diag_vendeur.py

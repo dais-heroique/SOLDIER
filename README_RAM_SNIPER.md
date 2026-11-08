@@ -60,7 +60,7 @@ redimensionnement (ça marche, mais ça consomme davantage de quota d'entrée).
 Vérification :
 
 ```bash
-venv/bin/python3 test_ram_sniper.py     # 109 tests, aucun accès réseau
+venv/bin/python3 test_ram_sniper.py     # 123 tests, aucun accès réseau
 venv/bin/python3 ram_db.py stats
 ```
 
@@ -761,65 +761,154 @@ Le dépôt est public, donc les minutes GitHub Actions sont gratuites et
 illimitées. Le workflow `.github/workflows/ram-sniper.yml` lance
 `python ram_sniper.py --ci` toutes les ~10 minutes : quelques mots-clés par
 source (tirés au hasard, ils tournent d'un passage à l'autre), filtre vendeur,
-envoi Telegram, puis sortie. La base SQLite est conservée d'un passage à l'autre
-par le cache GitHub.
+envoi Telegram, puis sortie. La base SQLite et l'état réseau passent d'un
+passage à l'autre par le cache GitHub.
 
 **Mise en route (5 minutes)**
 
 1. Sur GitHub : *Settings → Secrets and variables → Actions → New repository
    secret* : `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID` (obligatoires),
    `GEMINI_API_KEY` (facultatif : analyse des photos).
-2. Onglet *Actions → Test réseau (Vinted + Leboncoin) → Run workflow*.
-   **C'est l'étape décisive** (voir juste dessous).
-3. Si le test est vert : *Actions → RAM Sniper (scan planifié) → Run workflow*
-   pour un premier passage, puis le cron prend le relais.
+2. *Actions → Test réseau (Vinted + Leboncoin) → Run workflow* : un tableau dit
+   quelles sorties passent sur quel site.
+3. *Actions → RAM Sniper (scan planifié) → Run workflow* pour un premier
+   passage : tu reçois « ✅ RAM Sniper en ligne » sur Telegram. Le cron prend
+   ensuite le relais.
 4. Éteins le bot sur le Mac (`ram_service.py uninstall`) : deux instances
    doubleraient les requêtes et les notifications.
 
-**Le test réseau peut être rouge.** Vinted et Leboncoin sont protégés par
-Datadome, qui bloque souvent les IP de centres de données — et GitHub en est
-un. Ça n'a pas pu être vérifié depuis l'environnement où ce workflow a été
-écrit : seul le test réseau, lancé depuis les serveurs GitHub, le dira. S'il est
-rouge, trois issues :
+### Ne pas rester bloqué : la chaîne de sorties réseau
 
-| Option | Coût | Remarque |
-|---|---|---|
-| Secret `SNIPER_PROXY_URL` (`http://user:mdp@hote:port`) | proxy résidentiel payant | Les requêtes sortent par une IP « de particulier ». Gratuit = proxys publics, inutilisables en pratique. |
-| Raspberry Pi / vieux PC chez toi | ~50 € une fois, ou 0 | IP résidentielle, voir plus bas |
-| Garder le Mac en service | 0 | `ram_service.py install` |
+Vinted et Leboncoin (Datadome) bloquent **par adresse IP**, et une IP de
+serveur GitHub est une cible facile. Aucun réglage ne garantit qu'une IP ne
+sera jamais bloquée ; ce qu'on peut garantir, c'est qu'**une IP bloquée
+n'arrête pas le bot**. Il passe par une chaîne de sorties, essayées dans
+l'ordre :
 
-Quand tout est bloqué, un passage sort en code 3 : le run devient rouge et
-GitHub t'envoie un e-mail. Le bot ne reste jamais « aveugle » sans que tu le saches.
+| Sortie | Coût | Mise en place | Qualité de l'IP |
+|---|---|---|---|
+| **direct** — l'IP du serveur GitHub | 0 | rien | ⚠️ datacenter, souvent bloquée |
+| **maison** — ta box, via un appareil chez toi | 0 | 10 min (voir dessous) | ✅ IP de particulier, la meilleure |
+| **warp** — Cloudflare WARP | 0 | automatique | ❔ partagée par des millions d'utilisateurs : à voir dans « Test réseau » |
+| **proxy** — proxy résidentiel payant | payant | secret `SNIPER_PROXY_URLS` | ✅ |
 
-**Limites du mode hébergé**
+Ce qui se passe quand une sortie est bloquée :
+
+- La requête repart **aussitôt** par la sortie suivante : le mot-clé n'est pas
+  perdu.
+- La sortie bloquée est mise à l'écart, de plus en plus longtemps si ça se
+  répète (direct : 15 min → 6 h ; les autres : 5 min → 2 h). Insister sur une
+  IP bloquée aggrave le blocage.
+- L'état est gardé dans `.sorties_etat.json` : le passage suivant repart
+  directement de la sortie qui marche.
+- WARP n'est installé que si la connexion directe a été bloquée récemment
+  (`SNIPER_WARP=auto`) : pas 30 secondes perdues à chaque passage pour rien.
+- Si **tout** est bloqué : une seule requête test par passage, jamais un
+  martelage, et une alerte Telegram.
+
+Pour voir l'état des sorties sur ta machine : `python3 reseau.py etat`.
+
+**Les alertes Telegram**
+
+| Message | Quand |
+|---|---|
+| 🟠 « le bot passe par la sortie warp » | le direct est bloqué, un secours a pris le relais (au plus 1 fois / 24 h) |
+| 🔴 « Vinted bloqué sur toutes les sorties » | 2 passages d'affilée sans aucune sortie qui passe |
+| 🟢 « Vinted rétabli » | ça remarche après une alerte 🔴 |
+| ✅ résumé quotidien (silencieux) | une fois par jour : annonces vues, notifiées, état des sorties |
+
+**Le résumé quotidien est le vrai filet de sécurité** : un bot arrêté (cron
+désactivé par GitHub, panne) ne peut pas prévenir lui-même. Pas de résumé à
+l'heure habituelle = va voir l'onglet *Actions*.
+
+Quand tout est bloqué, le run reste vert (sinon GitHub enverrait un e-mail
+toutes les 10 minutes) : l'alerte passe par Telegram. Si Telegram n'est pas
+configuré, le run passe en rouge (code 3), c'est alors le seul signal.
+`ci.echec_si_bloque: true` force le rouge.
+
+### Installer la sortie maison (Tailscale, gratuit)
+
+Le serveur GitHub rejoint ton réseau privé Tailscale et fait sortir **les
+seules requêtes Vinted/Leboncoin** par un appareil chez toi. Le bot ne tourne
+pas sur cet appareil : il sert seulement de relais, ce qui consomme très peu
+(quelques dizaines de Mo par jour). Si l'appareil s'éteint, le bot continue
+par les autres sorties.
+
+**Appareils possibles** (allumé et branché en permanence) : un vieux téléphone
+**Android** en Wi-Fi, une Apple TV, un Raspberry Pi, un vieux PC, ou le Mac
+(juste en relais). Un **iPhone ne peut pas** servir de relais (« exit node »).
+
+1. Crée un compte gratuit sur tailscale.com et installe Tailscale sur
+   l'appareil. Active **« Run as exit node »** (Android : menu Exit node ;
+   Mac/PC : menu Tailscale → Exit node ; Linux/Pi :
+   `sudo tailscale up --advertise-exit-node`).
+2. Console Tailscale → *Machines* → l'appareil → *Edit route settings* →
+   coche **Use as exit node**. Puis, sur la même machine, menu « … » →
+   **Disable key expiry** (sinon l'appareil se déconnecte au bout de 6 mois).
+3. Note l'**adresse Tailscale** de l'appareil (`100.x.y.z`, dans *Machines*).
+4. Crée une clé pour GitHub, au choix :
+   - **simple** : *Settings → Keys → Generate auth key*, avec **Reusable** et
+     **Ephemeral** cochés. Elle expire au bout de 90 jours maximum : il faudra
+     la recréer (le test réseau le montre, et la sortie maison disparaît de
+     la chaîne sans rien casser) ;
+   - **durable** : un client OAuth (*Settings → OAuth clients*, droit
+     d'écriture sur *Auth Keys*, tag `tag:ci`), après avoir ajouté
+     `"tagOwners": {"tag:ci": ["autogroup:admin"]}` dans la politique d'accès.
+     Il n'expire pas.
+5. Sur GitHub, ajoute les secrets `TS_AUTHKEY` (la clé, ou le secret du client
+   OAuth `tskey-client-…`) et `TS_EXIT_NODE` (l'adresse `100.x.y.z`).
+6. Relance « Test réseau » : la colonne `maison` doit être ✅.
+
+Ton IP de box n'apparaît jamais dans les logs (publics) : le script vérifie
+que le trafic sort bien par la maison sans afficher l'adresse.
+
+### Rendre le planning fiable (facultatif, gratuit)
+
+GitHub retarde souvent les tâches planifiées (10-15 min au lieu de 5-10) et
+en saute parfois aux heures chargées. Un déclencheur externe gratuit,
+cron-job.org, peut lancer le workflow à l'heure :
+
+1. GitHub → *Settings* (de ton compte) → *Developer settings → Fine-grained
+   tokens* : un jeton limité au dépôt SOLDIER, permission **Actions : Read and
+   write**.
+2. cron-job.org → nouvelle tâche toutes les 5 ou 10 min :
+   - URL : `https://api.github.com/repos/dais-heroique/SOLDIER/actions/workflows/ram-sniper.yml/dispatches`
+   - Méthode `POST`, corps `{"ref":"main"}`
+   - En-têtes : `Authorization: Bearer <jeton>`,
+     `Accept: application/vnd.github+json`
+
+Le groupe `concurrency` du workflow empêche deux passages simultanés si le
+cron GitHub et le déclencheur externe tombent en même temps.
+
+### Limites du mode hébergé
 
 - **Les boutons Telegram** (ignorer, acheté…) ne répondent pas : aucun processus
   n'écoute en continu. Les notifications et leurs liens fonctionnent normalement.
-- **Cadence** : GitHub peut retarder ou sauter des passages planifiés (5 min
-  minimum, souvent 10-15 en pratique). Sur un marché où une affaire part en
-  minutes, c'est plus lent qu'un processus continu.
+- **Cadence** : un passage toutes les 5-15 min, plus lent qu'un processus
+  continu sur un marché où une affaire part en minutes.
 - **Inactivité** : GitHub désactive les workflows planifiés d'un dépôt sans
-  activité depuis 60 jours. Le workflow se réactive lui-même à chaque passage ;
-  vérifie de temps en temps l'onglet *Actions*.
+  activité depuis 60 jours. Le workflow se réactive lui-même à chaque passage,
+  et l'absence de résumé quotidien te préviendrait.
 - **La base** vit dans le cache GitHub (supprimé après 7 jours sans accès) :
-  s'il est perdu, le bot repart d'une base vide — les annonces des 3 dernières
-  heures peuvent être renotifiées une fois.
+  s'il est perdu, le bot repart d'une base vide et réapprend les sorties
+  bloquées en un passage.
+- **Calibrage des prix** : une fois par jour, borné à 30 vérifications
+  espacées (`ci.calibrage_annonces`), par une sortie qui marche.
 - Les **logs** d'un dépôt public sont publics : ils contiennent des titres et
-  URL d'annonces, jamais tes secrets (GitHub les masque).
+  URL d'annonces, jamais tes secrets (GitHub les masque) ni tes adresses IP.
 
 ### Le facteur décisif : Datadome
 
-Vinted est protégé par **Datadome**, qui bloque massivement les adresses IP de
-centres de données. Le scraper fonctionne depuis une connexion résidentielle ;
-depuis un serveur cloud, il se prend des HTTP 403 en quelques minutes. Ce n'est
-pas contournable proprement — c'est exactement ce que Datadome est payé pour
-faire.
+Vinted et Leboncoin sont protégés par **Datadome**, qui bloque massivement les
+adresses IP de centres de données. Le scraper fonctionne depuis une connexion
+résidentielle ; depuis un serveur cloud, il peut se prendre des HTTP 403 en
+quelques minutes.
 
-**Conséquence pratique : la meilleure machine pour ce bot est celle que vous
-avez déjà**, sur votre box internet. C'est aussi la seule option réellement
-gratuite.
+**Conséquence pratique : ce qui compte, c'est l'IP de sortie, pas la machine
+qui fait tourner le bot.** C'est tout le principe de la sortie maison
+ci-dessus : le bot tourne sur GitHub, mais ses requêtes sortent par ta box.
 
-### La solution recommandée : votre Mac, en service
+### Autre solution : le Mac, en service
 
 ```bash
 venv/bin/python3 ram_service.py install
@@ -858,7 +947,7 @@ Deux points d'attention :
 | Google Cloud e2-micro | ✅ (carte requise) | ❌ IP datacenter → 403 |
 | PythonAnywhere gratuit | ✅ | ❌ Vinted hors de la liste blanche |
 | Render / Railway | ❌ plus de vrai palier gratuit pour un worker | ❌ |
-| GitHub Actions (cron) | ✅ | ⚠️ IP datacenter : à tester avec le workflow « Test réseau » (voir ci-dessus) |
+| GitHub Actions (cron) | ✅ | ✅ avec la chaîne de sorties (maison / WARP) — voir ci-dessus |
 
 **Le meilleur rapport effort/résultat si vous voulez éteindre le Mac** : un
 Raspberry Pi 4 ou 5 branché sur votre box. Même IP résidentielle, 2 watts,

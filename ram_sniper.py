@@ -47,6 +47,7 @@ import ram_scoring
 import ram_scrapers
 import ram_telegram
 import ram_vision
+import reseau
 
 ARRET = threading.Event()
 
@@ -143,6 +144,7 @@ def worker_scraping(cfg, une_seule_fois=False, limite_mots=None):
     while not ARRET.is_set():
         cfg = ram_config.get()
         STATS["cycles"] += 1
+        reseau.debut_cycle()
         cycle = {"vues": 0, "retenues": 0, "meilleur": 0.0, "meilleur_titre": None}
         for scraper in scrapers:
             if ARRET.is_set():
@@ -203,9 +205,147 @@ def worker_scraping(cfg, une_seule_fois=False, limite_mots=None):
                          else f"rien n'atteint {seuil:.0f} — voir --diag"),
                 meilleure_annonce=cycle["meilleur_titre"])
 
+        alerter_sorties(cfg, [s.source for s in scrapers])
+
         if une_seule_fois:
             break
         ARRET.wait(5)
+
+
+# ─────────────────────── ALERTES RÉSEAU ET SIGNE DE VIE ───────────────────────
+NOMS_SOURCES = {"vinted": "Vinted", "leboncoin": "Leboncoin"}
+
+
+def sources_actives(cfg):
+    return [s for s in ("vinted", "leboncoin") if cfg.val(f"sources.{s}.actif", True)]
+
+
+def message_alerte(source, type_alerte, sortie=None):
+    nom = NOMS_SOURCES.get(source, source)
+    noms = [s.nom for s in reseau.sorties()]
+    if type_alerte == "bloque":
+        texte = (f"🔴 <b>{nom} bloqué</b> sur toutes les sorties réseau "
+                 f"({', '.join(noms)}).\nLe bot réessaie tout seul, sans marteler. ")
+        if len(noms) == 1:
+            texte += ("Une seule sortie est configurée : ajoute la sortie maison "
+                      "(Tailscale, gratuit) — README §10.")
+        else:
+            texte += "Si ça dure, vérifie que l'appareil de la sortie maison est allumé."
+        return texte
+    if type_alerte == "retabli":
+        return f"🟢 <b>{nom} rétabli</b> (sortie : {sortie}). La surveillance reprend normalement."
+    return (f"🟠 {nom} : la connexion directe est bloquée, le bot passe par la sortie "
+            f"<b>{sortie}</b>. Rien à faire.")
+
+
+def alerter_sorties(cfg, sources):
+    """Prévient sur Telegram quand une source est bloquée partout, quand elle
+    revient, et quand une sortie de secours prend le relais. Un raté isolé
+    n'alerte pas (alertes.cycles_avant_alerte)."""
+    seuil = int(cfg.val("alertes.cycles_avant_alerte", 2))
+    for source in sources:
+        try:
+            alerte = reseau.evaluer_alertes(source, seuil)
+        except Exception as e:
+            log("WARN", "évaluation des alertes réseau impossible", erreur=str(e))
+            continue
+        if not alerte:
+            continue
+        type_alerte, sortie = alerte
+        log("WARN" if type_alerte == "bloque" else "INFO", "alerte réseau",
+            source=source, alerte=type_alerte, sortie=sortie)
+        try:
+            if ram_telegram.est_principal(cfg):
+                ram_telegram.envoyer_texte(message_alerte(source, type_alerte, sortie), cfg,
+                                           silencieux=(type_alerte == "secours"))
+        except ram_telegram.TelegramError as e:
+            log("WARN", "alerte réseau non envoyée", erreur=str(e))
+
+
+def message_signe_de_vie(sources, premier=False):
+    depuis = time.time() - 86400
+    with ram_db.get_db() as conn:
+        def compter(condition=""):
+            return conn.execute("SELECT COUNT(*) n FROM ram_annonce WHERE detecte_le > ? "
+                                + condition, (depuis,)).fetchone()["n"]
+        vues, retenues = compter(), compter("AND exclusion IS NULL")
+        sans_avis = compter("AND exclusion = 'vendeur_sans_avis'")
+    notifiees = len(ram_db.notifications_recentes(86400))
+    if premier:
+        lignes = ["✅ <b>RAM Sniper en ligne</b> — premier passage réussi.",
+                  "Tu recevras ce résumé une fois par jour."]
+    else:
+        lignes = ["✅ <b>RAM Sniper en ligne</b> — dernières 24 h",
+                  f"Annonces vues : {vues} · retenues : {retenues} · notifiées : {notifiees}",
+                  f"Écartées (vendeur sans avis) : {sans_avis}"]
+    lignes.append("Sorties réseau :")
+    for src in sources:
+        lignes.append(f"• {NOMS_SOURCES.get(src, src)} : "
+                      f"{ram_telegram._echapper(reseau.resume_texte(src))}")
+    lignes.append("<i>Pas de résumé demain = le bot ne tourne plus : regarde l'onglet "
+                  "Actions sur GitHub.</i>")
+    return "\n".join(lignes)
+
+
+def signe_de_vie(cfg, sources=None):
+    """Un résumé silencieux par jour. Son ABSENCE est l'alerte : un bot arrêté
+    (cron désactivé, GitHub en panne) ne peut pas prévenir lui-même."""
+    heures = float(cfg.val("alertes.signe_de_vie_h", 24) or 0)
+    if heures <= 0 or not ram_config.secret("TELEGRAM_BOT_TOKEN"):
+        return False
+    v = reseau.vie()
+    dernier = float(v.get("signe_de_vie_le") or 0)
+    if dernier and time.time() - dernier < heures * 3600:
+        return False
+    sources = sources or sources_actives(cfg)
+    try:
+        if not ram_telegram.est_principal(cfg):
+            return False
+        ram_telegram.envoyer_texte(message_signe_de_vie(sources, premier=not dernier),
+                                   cfg, silencieux=True)
+    except ram_telegram.TelegramError as e:
+        log("WARN", "signe de vie non envoyé — nouvel essai au prochain passage",
+            erreur=str(e))
+        return False
+    v["signe_de_vie_le"] = time.time()
+    reseau.sauver()
+    return True
+
+
+def maintenance_quotidienne(cfg):
+    """En ligne, il n'y a pas de planificateur permanent : calibrage des prix et
+    purge passent une fois par jour, au premier passage après calibrage.heure_job.
+    Le calibrage est borné (ci.calibrage_annonces) et passe par une sortie qui
+    marche, pour ne pas griller l'IP en rafale."""
+    v = reseau.vie()
+    maintenant = datetime.now()
+    aujourdhui = maintenant.strftime("%Y-%m-%d")
+    if v.get("maintenance_le") == aujourdhui or \
+            maintenant.strftime("%H:%M") < str(cfg.val("calibrage.heure_job", "04:30")):
+        return False
+    v["maintenance_le"] = aujourdhui
+    reseau.sauver()
+    try:
+        purger(cfg)
+    except Exception as e:
+        log("WARN", "purge en échec", erreur=str(e))
+    if not cfg.val("calibrage.actif", True):
+        return True
+    try:
+        sortie = reseau.choisir("vinted")
+        n = 0
+        if sortie is not None and ram_scrapers._HAS_VINTED:
+            client = ram_scrapers.VintedClient(country="FR", proxy=sortie.url)
+            n = ram_calibration.collecter_vinted_vendus(
+                cfg=cfg, verbose=False, client=client,
+                limite_annonces=int(cfg.val("ci.calibrage_annonces", 30)))
+        changements = ram_calibration.recalibrer(cfg=cfg, verbose=False)
+        log("INFO", "maintenance quotidienne", observations=n,
+            references_recalibrees=len(changements),
+            sortie=sortie.nom if sortie else None)
+    except Exception as e:
+        log("WARN", "calibrage en échec", erreur=str(e))
+    return True
 
 
 # ─────────────────────── WORKER NOTIFICATION ───────────────────────
@@ -449,6 +589,10 @@ def worker_planificateur(cfg):
             except Exception as e:
                 log("WARN", "purge en échec", erreur=str(e))
 
+        try:
+            signe_de_vie(cfg)
+        except Exception as e:
+            log("WARN", "signe de vie en échec", erreur=str(e))
         _ecrire_sante()          # battement régulier : prouve que le bot tourne
         ARRET.wait(30)
 
@@ -496,6 +640,8 @@ def etat(cfg=None):
         "file_notification": file_notif,
         "vision": ram_vision.etat_quota(cfg),
         "sources": ram_scrapers.etat_sources(cfg),
+        "sorties_reseau": {"ordre": [x.nom for x in reseau.sorties()],
+                           "etat": reseau.resume()},
         "base": ram_db.stats_base(),
         "kpis": ram_db.kpis(),
         "calibrage": ram_calibration.alerte_calibrage(cfg),
@@ -546,11 +692,12 @@ def executer_ci(cfg=None):
     scan de quelques mots-clés par source, envoi des notifications en attente,
     analyses vision si une clé Gemini existe, puis sortie propre.
 
-    Code de sortie : 0 = passage normal ; 3 = TOUTES les requêtes du passage
-    ont échoué (typiquement : IP de serveur bloquée par Datadome). Le code
-    non nul fait apparaître le run en rouge et GitHub t'écrit : tu sais tout
-    de suite que l'hébergement gratuit ne passe pas, au lieu de croire que
-    le bot surveille alors qu'il est aveugle.
+    Chaque requête bloquée bascule sur la sortie réseau suivante (reseau.py).
+    Quand TOUT est bloqué, l'alerte part sur Telegram (après
+    alertes.cycles_avant_alerte passages) et le run reste vert — un run rouge
+    toutes les 10 min, c'est un e-mail de GitHub toutes les 10 min. Code 3
+    seulement si Telegram n'est pas configuré (seul signal restant) ou si
+    ci.echec_si_bloque est vrai.
     """
     cfg = cfg or ram_config.get()
     ram_db.init_db()
@@ -569,6 +716,7 @@ def executer_ci(cfg=None):
         except Exception:
             vision_ok = False
 
+    log("INFO", "sorties réseau", ordre=[x.nom for x in reseau.sorties()])
     req0, err0 = _requetes_et_erreurs()
     ARRET.clear()
     cibles = [("notification", worker_notification, (cfg,))]
@@ -598,22 +746,38 @@ def executer_ci(cfg=None):
     for t in fils:
         t.join(timeout=10)
 
+    for tache in (lambda: signe_de_vie(cfg), lambda: maintenance_quotidienne(cfg)):
+        try:
+            tache()
+        except Exception as e:
+            log("WARN", "tâche périodique en échec", erreur=str(e))
+
     try:    # fusionne le journal WAL : la base est ensuite un fichier unique
         with ram_db.get_db() as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except Exception as e:
         log("WARN", "checkpoint de la base impossible", erreur=str(e))
 
+    reseau.sauver()
+
     req1, err1 = _requetes_et_erreurs()
     requetes, erreurs = req1 - req0, err1 - err0
+    bilan = reseau.bilan_cycle()
+    essayees = [src for src, c in bilan.items() if c["ok"] or c["echecs"]]
+    reussies = {src: c["ok"] for src, c in bilan.items() if c["ok"]}
     log("INFO", "passage terminé", requetes=requetes, erreurs=erreurs,
         nouvelles=STATS["annonces_nouvelles"], notifiees=STATS["notifiees"],
-        rejetees=STATS["rejetees"])
-    if requetes > 0 and erreurs >= requetes:
-        log("ERROR", "toutes les requêtes ont échoué — IP probablement bloquée "
-            "(Datadome). Lance le workflow « Test réseau » ou configure "
-            "SNIPER_PROXY_URL.", requetes=requetes)
-        return 3
+        rejetees=STATS["rejetees"], sorties_utilisees=reussies,
+        sources_bloquees=[src for src in essayees if src not in reussies])
+    tout_bloque = bool(essayees and not reussies) or (requetes > 0 and erreurs >= requetes)
+    if tout_bloque:
+        log("ERROR", "toutes les sources sont bloquées sur toutes les sorties réseau. "
+            "Lance « Test réseau » et ajoute une sortie maison (README §10).",
+            sorties=[x.nom for x in reseau.sorties()])
+        telegram_ok = bool(ram_config.secret("TELEGRAM_BOT_TOKEN")
+                           and ram_config.secret("TELEGRAM_CHAT_ID"))
+        if cfg.val("ci.echec_si_bloque", False) or not telegram_ok:
+            return 3
     return 0
 
 
@@ -829,6 +993,8 @@ def main():
     print(f"  {'✅' if quota['disponible'] else '⏸'} vision      "
           f"{quota['provider']}/{quota['modele']} — "
           f"{quota['restant_jour']}/{quota['plafond_jour']} restants aujourd'hui")
+    print(f"  🌐 sorties     {', '.join(x.nom for x in reseau.sorties())}"
+          "  (bascule automatique si l'une est bloquée)")
     print(f"  {'🔕' if cfg.dry_run else '🔔'} telegram    mode {cfg.notif_mode}"
           + ("  (DRY-RUN : aucune notification ne sera envoyée)" if cfg.dry_run else ""))
     print(f"  📊 dashboard   AUTRE terminal : "
