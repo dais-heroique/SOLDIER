@@ -2839,6 +2839,39 @@ def _():
     finally:
         ram_telegram.envoyer_texte = orig
 
+
+@test("RAM : prix max fixés (2x8 ≤ 50 € sauf Trident Z Royal, 1x16 ≤ 40 €, 2x16 ≤ 100 €, 64 Go ignoré)")
+def _():
+    cfg = ram_config.get()
+    def pre(titre, prix):
+        a = ram_parser.analyser(titre, "Fonctionne parfaitement, testé.", 3, cfg)
+        _, _, total = ram_scoring.frais_acquisition("vinted", float(prix), cfg=cfg)
+        ann = {"titre": titre, "prix_affiche": float(prix), "prix_total": total,
+               "source": "vinted", "photos": ["a", "b", "c"], "vendeur_avis": 20}
+        for k in ("ref_id", "tier", "capacite_totale_go", "frequence_mhz", "nb_modules",
+                  "capacite_module_go"):
+            ann[k] = a.get(k)
+        return ram_scoring.pre_score(ann, a, cfg)
+    seuil = float(cfg.val("scoring.seuil_notification", 55))
+    for titre, prix, ok in (("Corsair Vengeance LPX 16Go (2x8Go) DDR4 3200", 50, True),
+                            ("Corsair Vengeance LPX 16Go (2x8Go) DDR4 3200", 51, False),
+                            ("Kingston Fury 2x8Go DDR4 3000MHz", 45, True),
+                            ("G.Skill Trident Z RGB 2x8Go DDR4 3200", 50, True),
+                            ("Crucial 1x16Go DDR4 3200", 40, True),
+                            ("Crucial 1x16Go DDR4 3200", 41, False),
+                            ("Corsair Vengeance 32Go (2x16) DDR4 3600", 100, True),
+                            ("Corsair Vengeance 32Go (2x16) DDR4 3600", 105, False),
+                            ("Kit 64Go (2x32) DDR4 3200 Corsair", 60, False)):
+        r = pre(titre, prix)
+        assert (not r["exclusion"] and r["pre_score"] >= seuil) == ok, (titre, prix, r["exclusion"],
+                                                                         r["rejet_motif"])
+    r = pre("Kit 64Go (2x32) DDR4 3200 Corsair", 60)
+    assert r["exclusion"] == "hors_cible", r
+    r = pre("G.Skill Trident Z Royal 2x8Go DDR4 3600", 50)
+    assert r.get("regle_prix") is None, "Trident Z Royal : calcul normal, pas le plafond 50 €"
+    r = pre("Kingston 2x8Go DDR4 2666", 45)
+    assert r.get("regle_prix") is None, "sous 3000 MHz : calcul normal"
+
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]

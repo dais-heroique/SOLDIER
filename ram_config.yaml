@@ -168,6 +168,21 @@ frais:
     leboncoin_commission_pct: 0.0
     emballage_eur: 1.20         # bulle + carton, par expédition
 
+# ─────────────────────────── PRIX MAX RAM (fixés à la main) ───────────────────────────
+# Remplacent le calcul de marge pour les configurations listées : alerte dès
+# que le prix AFFICHÉ (frais et port non compris) est au plafond ou en dessous.
+# Les contrôles vendeur (≥ 1 avis), arnaque, DDR3, portable… restent appliqués.
+# Une annonce dont la configuration est illisible (« 16 Go DDR4 » sans « 2x8 »)
+# ou non listée (1x32, 4x8, 1x8…) garde le calcul normal.
+# Ordre : la première règle qui correspond s'applique.
+ram_prix_max:
+  actif: true
+  regles:
+    - {capacite_totale: 64, ignorer: true}                     # 64 Go : pas recherché
+    - {config: 2x8, max: 50, frequence_min: 3000, sauf: [trident z royal]}
+    - {config: 1x16, max: 40, frequence_min: 3000}
+    - {config: 2x16, max: 100, frequence_min: 3000}
+
 # ─────────────────────────── PÉRIMÈTRE ───────────────────────────
 perimetre:
   capacites_autorisees: [8, 16, 32]
@@ -316,6 +331,7 @@ sources:
     mots_cles:
       - ddr4
       - ddr 4
+      - ddr4 3000
       - ddr4 3200
       - ddr4 3600
       - ddr4 32go
@@ -358,6 +374,7 @@ sources:
     departements: ["74", "73", "01", "69"]   # Haute-Savoie, Savoie, Ain, Rhône
     mots_cles:
       - ddr4
+      - ddr4 3000
       - ddr4 3200
       - ddr4 16go
       - ddr4 32go
