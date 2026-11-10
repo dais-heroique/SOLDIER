@@ -51,6 +51,11 @@ import ram_vision
 import reseau
 
 ARRET = threading.Event()
+# Arrêt du scan seul : en fin de session continue, on cesse de chercher mais
+# le worker de notification finit d'envoyer ce qui est en file.
+ARRET_SCAN = threading.Event()
+_reveil_notif = threading.Event()        # une annonce vient d'entrer en file
+_verrou_composants = threading.Lock()    # un seul envoi « composants » à la fois
 
 # File de notification : tas trié par score décroissant. Une annonce à 88 ne
 # doit jamais attendre derrière une annonce à 66 arrivée deux secondes plus tôt.
@@ -85,6 +90,7 @@ def _enfiler_notification(resultat):
         # heapq est un min-tas : on stocke l'opposé du score pour sortir le
         # meilleur en premier.
         heapq.heappush(_file_notif, (-score, annonce["id"], time.time()))
+    _reveil_notif.set()      # réveille le worker tout de suite (pas d'attente de 2 s)
 
 
 def traiter_resultats(resultats, cfg):
@@ -230,6 +236,151 @@ def worker_scraping(cfg, une_seule_fois=False, limite_mots=None):
         if une_seule_fois:
             break
         ARRET.wait(5)
+
+
+# ─────────────────────── SCAN CONTINU (un fil par source) ───────────────────────
+RAPIDE_DEFAUT_S = {"vinted": [12, 20], "leboncoin": [25, 40]}
+PAUSES_BLOCAGE_S = [60, 120, 300, 600]
+BILAN_TOUTES_LES_S = 120
+
+
+def _scan_fini():
+    return ARRET.is_set() or ARRET_SCAN.is_set()
+
+
+def _attendre_scan(secondes):
+    """Attente interruptible par l'un ou l'autre des deux signaux d'arrêt."""
+    fin = time.time() + secondes
+    while not _scan_fini() and time.time() < fin:
+        time.sleep(min(1.0, max(0.05, fin - time.time())))
+
+
+def mots_rapides(scraper, cfg):
+    """Mots-clés de la voie rapide : les recherches larges, triées « plus
+    récent d'abord », où toute nouvelle annonce apparaît en tête."""
+    rapides = cfg.val(f"sources.{scraper.source}.mots_cles_rapides", None)
+    if not rapides:
+        rapides = scraper.mots_cles()[:1]
+    return [str(m) for m in rapides]
+
+
+class Tournee:
+    """Ordre des recherches d'une source en mode continu.
+
+    Deux voies, à débit de requêtes INCHANGÉ (delai_entre_requetes_s) :
+      • rapide — quelques recherches larges, refaites toutes les 10-40 s :
+        une annonce qui vient d'être publiée est vue en quelques secondes ;
+      • lente — tous les autres mots-clés et les recherches « composants »,
+        à tour de rôle, dans les créneaux laissés libres par la voie rapide.
+    Avant, chaque mot-clé attendait son tour dans un cycle de plusieurs
+    minutes, les deux sources l'une derrière l'autre.
+    """
+
+    def __init__(self, scraper, horloge=time.time):
+        self.scraper = scraper
+        self.horloge = horloge
+        self._echeance = {}      # mot rapide -> prochain passage
+        self._lente = []
+
+    def suivante(self, cfg):
+        """("ram", mot) ou ("composant", None)."""
+        source = self.scraper.source
+        maintenant = self.horloge()
+        rapides = mots_rapides(self.scraper, cfg)
+        lo, hi = cfg.val(f"sources.{source}.rapide_toutes_les_s",
+                         RAPIDE_DEFAUT_S.get(source, [20, 30]))
+        for mot in rapides:
+            if maintenant >= self._echeance.get(mot, 0):
+                self._echeance[mot] = maintenant + random.uniform(float(lo), float(hi))
+                return "ram", mot
+        if not self._lente:
+            lents = [("ram", m) for m in self.scraper.mots_cles() if m not in rapides]
+            if cfg.val("composants.actif", True):
+                n = int(ram_composants.reglages(cfg)["requetes_par_source"])
+                lents += [("composant", None)] * max(0, n)
+            random.shuffle(lents)      # pas de motif régulier côté anti-bot
+            self._lente = lents or [("ram", m) for m in rapides]
+        return self._lente.pop()
+
+
+def worker_source(scraper, cfg):
+    """Scan continu d'UNE source. Chaque source a son fil : Leboncoin, plus
+    lent, ne retarde plus Vinted. Les annonces partent en notification une par
+    une, dès qu'elles sont évaluées."""
+    source = scraper.source
+    tournee = Tournee(scraper)
+    blocages = 0
+    dernier_bilan = time.time()
+    reseau.debut_cycle(source)
+    log("INFO", "scan continu démarré", source=source,
+        rapides=mots_rapides(scraper, cfg))
+
+    def bilan():
+        alerter_sorties(ram_config.get(), [source])
+        reseau.debut_cycle(source)
+
+    while not _scan_fini():
+        cfg = ram_config.get()
+        seuil_disj = int(cfg.val(f"sources.{source}.disjoncteur_echecs", 4))
+        if seuil_disj and scraper.echecs_consecutifs >= seuil_disj:
+            # Bloqué partout : insister aggrave le blocage. On attend, de plus
+            # en plus longtemps, puis on retente ; l'alerte Telegram part d'ici.
+            pause = PAUSES_BLOCAGE_S[min(blocages, len(PAUSES_BLOCAGE_S) - 1)]
+            blocages += 1
+            log("WARN", "disjoncteur : source en pause", source=source,
+                echecs=scraper.echecs_consecutifs, pause_s=pause)
+            bilan()
+            dernier_bilan = time.time()
+            scraper.echecs_consecutifs = 0
+            _attendre_scan(pause)
+            continue
+
+        genre, mot = tournee.suivante(cfg)
+        try:
+            if genre == "composant":
+                # scanner_source fait sa propre pause après la requête.
+                evals = ram_composants.scanner_source(scraper, cfg, limite=1,
+                                                      arret=ARRET_SCAN)
+                STATS["annonces_vues"] += len(evals)
+                if any(e.get("statut") == "a_notifier" for e in evals):
+                    with _verrou_composants:
+                        ram_composants.notifier(cfg)
+            else:
+                resultats = scraper.scanner_mot_cle(
+                    mot, sur_resultat=lambda r: traiter_resultats([r], cfg))
+                STATS["annonces_vues"] += len(resultats)
+                nouvelles = sum(1 for r in resultats if r["nouvelle"])
+                if nouvelles:
+                    log("INFO", "scan", source=source, mot_cle=mot,
+                        vues=len(resultats), nouvelles=nouvelles)
+            STATS["dernier_scan"] = time.time()
+        except Exception as e:
+            STATS["erreurs"] += 1
+            scraper.echecs_consecutifs = getattr(scraper, "echecs_consecutifs", 0) + 1
+            log("ERROR", "scan en échec", source=source, mot_cle=mot, erreur=str(e))
+        if scraper.echecs_consecutifs == 0:
+            blocages = 0
+
+        if time.time() - dernier_bilan >= BILAN_TOUTES_LES_S:
+            dernier_bilan = time.time()
+            STATS["cycles"] += 1
+            bilan()
+        if genre != "composant" and not _scan_fini():
+            lo, hi = cfg.val(f"sources.{source}.delai_entre_requetes_s", [2.5, 5.0])
+            _attendre_scan(random.uniform(float(lo), float(hi)))
+
+
+def cibles_scan_continu(cfg):
+    """Un worker supervisé par source active."""
+    cibles = []
+    if cfg.val("sources.vinted.actif", True):
+        cibles.append(("scan-vinted", worker_source, (ram_scrapers.ScraperVinted(cfg), cfg)))
+    if cfg.val("sources.leboncoin.actif", True):
+        cibles.append(("scan-leboncoin", worker_source,
+                       (ram_scrapers.ScraperLeboncoin(cfg), cfg)))
+    if not cibles:
+        log("WARN", "aucune source active")
+    return cibles
 
 
 # ─────────────────────── ALERTES RÉSEAU ET SIGNE DE VIE ───────────────────────
@@ -435,13 +586,14 @@ def worker_notification(cfg):
             ARRET.wait(20)
             continue
         if not ram_telegram.anti_spam_ok(cfg):
-            ARRET.wait(2)
+            ARRET.wait(1)
             continue
 
         with _verrou_notif:
             entree = heapq.heappop(_file_notif) if _file_notif else None
         if entree is None:
-            ARRET.wait(2)
+            _reveil_notif.wait(2)
+            _reveil_notif.clear()
             continue
 
         score_negatif, annonce_id, _ = entree
@@ -686,8 +838,10 @@ def demarrer(cfg=None, une_seule_fois=False, avec_callbacks=True):
             manquants=manquants)
 
     threads = []
-    cibles = [("scraping", worker_scraping, (cfg, une_seule_fois))]
-    if not une_seule_fois:
+    if une_seule_fois:
+        cibles = [("scraping", worker_scraping, (cfg, une_seule_fois))]
+    else:
+        cibles = cibles_scan_continu(cfg)
         cibles += [
             ("notification", worker_notification, (cfg,)),
             ("vision", worker_vision, (cfg,)),
@@ -865,6 +1019,147 @@ def executer_ci(cfg=None):
 
 
 # Santé des workers, pour --etat et le dashboard.
+# ─────────────────────── SESSION CONTINUE (hébergement en ligne) ───────────────────────
+def _checkpoint_base():
+    """Fusionne le journal WAL : seul soldier.db est sauvegardé en ligne."""
+    try:
+        with ram_db.get_db() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:
+        log("WARN", "checkpoint de la base impossible", erreur=str(e))
+
+
+def _publier_relais(valeur):
+    """Dit au workflow GitHub s'il doit relancer une session derrière celle-ci."""
+    chemin = os.environ.get("GITHUB_OUTPUT")
+    if not chemin:
+        return
+    try:
+        with open(chemin, "a", encoding="utf-8") as f:
+            f.write(f"relais={'true' if valeur else 'false'}\n")
+    except OSError:
+        pass
+
+
+def executer_continu(cfg=None, duree_s=None, pas_s=1.0):
+    """Session longue pour GitHub Actions : le bot tourne SANS ARRÊT, comme
+    sur un ordinateur (un fil par source, voie rapide, notifications
+    immédiates), au lieu d'un passage toutes les 10 minutes.
+
+    Un job GitHub est limité à 6 h : la session s'arrête proprement avant
+    (ci.duree_session_min), sauvegarde, et demande au workflow de lancer la
+    suivante (relais). Elle s'arrête aussi à la sortie de la plage horaire.
+    Un lancement manuel hors plage sert de test : ci.duree_test_min, sans relais.
+    """
+    cfg = cfg or ram_config.get()
+    force = bool(os.environ.pop("SNIPER_IGNORER_PLAGE", None))
+    en_plage = dans_plage_horaire(cfg)
+    if not en_plage and not force:
+        log("INFO", "hors plage horaire : session non démarrée", plage=plage_horaire(cfg))
+        _publier_relais(False)
+        return 0
+    if duree_s is None:
+        env = os.environ.get("SNIPER_DUREE_MIN")
+        minutes = float(env) if env else float(
+            cfg.val("ci.duree_session_min", 320) if en_plage
+            else cfg.val("ci.duree_test_min", 15))
+        duree_s = minutes * 60
+    test_hors_plage = not en_plage
+
+    ram_db.init_db()
+    os.environ["RAM_SANS_ELECTION"] = "1"     # une seule instance en ligne
+    manquants = ram_config.secrets_manquants()
+    if manquants and not cfg.dry_run:
+        log("WARN", "secrets manquants", manquants=manquants)
+    vision_ok = False
+    if cfg.val("vision.actif", True):
+        try:
+            vision_ok = bool(ram_vision.provider_par_defaut(cfg).disponible())
+        except Exception:
+            vision_ok = False
+
+    log("INFO", "session continue", duree_min=round(duree_s / 60),
+        plage=plage_horaire(cfg), sorties=[x.nom for x in reseau.sorties()],
+        test_hors_plage=test_hors_plage)
+    ARRET.clear()
+    ARRET_SCAN.clear()
+    signal_recu = threading.Event()
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: signal_recu.set())
+    except ValueError:
+        pass                                   # hors du fil principal (tests)
+
+    sources = cibles_scan_continu(cfg)
+    autres = [("notification", worker_notification, (cfg,))]
+    if vision_ok:
+        autres.append(("vision", worker_vision, (cfg,)))
+    if cfg.val("telegram.actif", True) and not cfg.dry_run \
+            and ram_config.secret("TELEGRAM_BOT_TOKEN"):
+        # Boutons des messages Telegram : possibles maintenant que le bot est
+        # présent en permanence (un passage toutes les 10 min ne le permettait pas).
+        autres.append(("callbacks", lambda c: ram_telegram.boucle_callbacks(cfg=c), (cfg,)))
+    fils_scan, fils_autres = [], []
+    for groupe, liste in ((sources, fils_scan), (autres, fils_autres)):
+        for nom, cible, args in groupe:
+            t = threading.Thread(target=_superviser, args=(nom, cible, args),
+                                 name=f"ram-{nom}", daemon=True)
+            t.start()
+            liste.append(t)
+
+    fin = time.time() + duree_s
+    dernier_entretien = time.time()
+    motif = "durée"
+    while True:
+        if signal_recu.is_set():
+            motif = "signal"
+            break
+        if time.time() >= fin:
+            break
+        if not test_hors_plage and not dans_plage_horaire(cfg):
+            motif = "plage"
+            break
+        if time.time() - dernier_entretien >= 60:
+            dernier_entretien = time.time()
+            cfg = ram_config.get()
+            for tache in (lambda: signe_de_vie(cfg), lambda: maintenance_quotidienne(cfg),
+                          reseau.sauver, _checkpoint_base, _ecrire_sante):
+                try:
+                    tache()
+                except Exception as e:
+                    log("WARN", "tâche périodique en échec", erreur=str(e))
+        time.sleep(pas_s)
+
+    if motif == "signal":
+        # Annulation GitHub : ~10 s avant d'être tué. On sauve, sans attendre.
+        ARRET_SCAN.set()
+        ARRET.set()
+    else:
+        ARRET_SCAN.set()
+        for t in fils_scan:                    # laisse finir la requête en cours
+            t.join(timeout=45)
+        limite = time.time() + float(cfg.val("ci.budget_notifications_s", 240)) / 4
+        while time.time() < limite:            # laisse partir ce qui est en file
+            with _verrou_notif:
+                if not _file_notif:
+                    break
+            time.sleep(0.5)
+        ARRET.set()
+        _reveil_notif.set()
+        for t in fils_autres:
+            if "callbacks" not in t.name:
+                t.join(timeout=10)
+    _checkpoint_base()
+    reseau.sauver()
+
+    relais = motif == "durée" and not test_hors_plage and dans_plage_horaire(cfg)
+    _publier_relais(relais)
+    log("INFO", "session terminée", motif=motif, relais=relais,
+        nouvelles=STATS["annonces_nouvelles"], notifiees=STATS["notifiees"],
+        rejetees=STATS["rejetees"], erreurs=STATS["erreurs"])
+    return 0
+
+
 SANTE = {}
 SANTE_FICHIER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              ".ram_sante.json")
@@ -928,6 +1223,7 @@ OPTIONS = {
     "--dry-run": "n'envoie aucune notification",
     "--once": "un seul tour de scan puis sortie",
     "--ci": "un passage complet (scan + notifications) puis sortie — hébergement cron",
+    "--continu": "session longue sans arrêt (hébergement en ligne, relais automatique)",
     "--dashboard": "sert le dashboard web (défaut : port 8010)",
     "--diag": "explique pourquoi les annonces sont rejetées",
     "--replay": "rejoue les annonces archivées à travers le scoring courant",
@@ -1069,6 +1365,9 @@ def main():
         print("  • Pour arrêter l'instance en cours : Ctrl+C dans son terminal")
         print("  • Pour passer outre malgré tout : --force\n")
         sys.exit(1)
+
+    if "--continu" in args:
+        sys.exit(executer_continu(cfg))
 
     if "--ci" in args:
         sys.exit(executer_ci(cfg))

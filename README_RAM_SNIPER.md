@@ -759,10 +759,23 @@ les caractéristiques techniques sont resynchronisées.
 
 Le dépôt est public, donc les minutes GitHub Actions sont gratuites et
 illimitées. Le workflow `.github/workflows/ram-sniper.yml` lance
-`python ram_sniper.py --ci` toutes les ~10 minutes : quelques mots-clés par
-source (tirés au hasard, ils tournent d'un passage à l'autre), filtre vendeur,
-envoi Telegram, puis sortie. La base SQLite et l'état réseau passent d'un
-passage à l'autre par le cache GitHub.
+`python ram_sniper.py --continu` : le bot tourne **sans arrêt** pendant la
+plage horaire, comme sur un ordinateur.
+
+- **Un fil par source** : Vinted et Leboncoin sont scannés en parallèle.
+- **Voie rapide** : les recherches larges (`mots_cles_rapides`, triées « plus
+  récent d'abord ») reviennent toutes les 12-40 s (`rapide_toutes_les_s`) ; les
+  autres mots-clés et les composants tournent dans les créneaux restants. Le
+  débit de requêtes (`delai_entre_requetes_s`) ne change pas.
+- **Notification immédiate** : chaque annonce part sur Telegram dès qu'elle
+  est évaluée, sans attendre la fin du lot ni du cycle.
+- **Sessions et relais** : un job GitHub est limité à 6 h. La session s'arrête
+  proprement vers 5 h 20 (`ci.duree_session_min`), sauvegarde la base, et lance
+  la suivante (1 à 2 minutes de coupure). Le cron (toutes les 10 min) n'est
+  plus qu'un chien de garde : il démarre une session s'il n'y en a aucune
+  (début de journée, session tombée).
+
+L'ancien mode « un passage puis sortie » existe toujours (`--ci`).
 
 **Mise en route (5 minutes)**
 
@@ -771,9 +784,9 @@ passage à l'autre par le cache GitHub.
    `GEMINI_API_KEY` (facultatif : analyse des photos).
 2. *Actions → Test réseau (Vinted + Leboncoin) → Run workflow* : un tableau dit
    quelles sorties passent sur quel site.
-3. *Actions → RAM Sniper (scan planifié) → Run workflow* pour un premier
-   passage : tu reçois « ✅ RAM Sniper en ligne » sur Telegram. Le cron prend
-   ensuite le relais.
+3. *Actions → RAM Sniper (en continu) → Run workflow* : la session démarre et
+   tu reçois « ✅ RAM Sniper en ligne » sur Telegram. Ensuite tout s'enchaîne
+   tout seul.
 4. Éteins le bot sur le Mac (`ram_service.py uninstall`) : deux instances
    doubleraient les requêtes et les notifications.
 
@@ -784,8 +797,8 @@ Hors plage, le job `plage` du workflow répond « non » en quelques secondes et
 le job de scan n'est même pas démarré. Pour changer : *Settings → Secrets and
 variables → Actions → onglet **Variables** → New repository variable*
 `SNIPER_HEURES` = `9-18` (début inclus, fin exclue ; `0-24` = tout le temps).
-Un lancement manuel (*Run workflow*) ignore toujours la plage, pour tester à
-n'importe quelle heure. La plage réduit aussi le volume de requêtes d'un tiers.
+Un lancement manuel (*Run workflow*) hors plage tourne 15 minutes
+(`ci.duree_test_min`), pour tester à n'importe quelle heure. La plage réduit aussi le volume de requêtes d'un tiers.
 
 ### Ne pas rester bloqué : la chaîne de sorties réseau
 
@@ -872,30 +885,15 @@ par les autres sorties.
 Ton IP de box n'apparaît jamais dans les logs (publics) : le script vérifie
 que le trafic sort bien par la maison sans afficher l'adresse.
 
-### Rendre le planning fiable (facultatif, gratuit)
-
-GitHub retarde souvent les tâches planifiées (10-15 min au lieu de 5-10) et
-en saute parfois aux heures chargées. Un déclencheur externe gratuit,
-cron-job.org, peut lancer le workflow à l'heure :
-
-1. GitHub → *Settings* (de ton compte) → *Developer settings → Fine-grained
-   tokens* : un jeton limité au dépôt SOLDIER, permission **Actions : Read and
-   write**.
-2. cron-job.org → nouvelle tâche toutes les 5 ou 10 min :
-   - URL : `https://api.github.com/repos/dais-heroique/SOLDIER/actions/workflows/ram-sniper.yml/dispatches`
-   - Méthode `POST`, corps `{"ref":"main"}`
-   - En-têtes : `Authorization: Bearer <jeton>`,
-     `Accept: application/vnd.github+json`
-
-Le groupe `concurrency` du workflow empêche deux passages simultanés si le
-cron GitHub et le déclencheur externe tombent en même temps.
-
 ### Limites du mode hébergé
 
-- **Les boutons Telegram** (ignorer, acheté…) ne répondent pas : aucun processus
-  n'écoute en continu. Les notifications et leurs liens fonctionnent normalement.
-- **Cadence** : un passage toutes les 5-15 min, plus lent qu'un processus
-  continu sur un marché où une affaire part en minutes.
+- **Coupures** : 1 à 2 minutes entre deux sessions (toutes les ~5 h 20), et
+  quelques minutes de retard possible au démarrage du matin (cron GitHub).
+- **Session tombée** (panne GitHub) : le chien de garde relance sous 10 min ;
+  les annonces vues depuis la dernière sauvegarde peuvent être re-notifiées.
+- **Volume** : en continu, Leboncoin reçoit autant de requêtes qu'avec le bot
+  sur le Mac (une toutes les 5-9 s), par la sortie maison. Si Leboncoin se met
+  à bloquer la box, augmente `sources.leboncoin.delai_entre_requetes_s`.
 - **Inactivité** : GitHub désactive les workflows planifiés d'un dépôt sans
   activité depuis 60 jours. Le workflow se réactive lui-même à chaque passage,
   et l'absence de résumé quotidien te préviendrait.

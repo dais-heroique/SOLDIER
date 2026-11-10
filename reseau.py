@@ -240,9 +240,14 @@ def signaler_echec(source, sortie, erreur=""):
 
 
 # ─────────────────────── BILAN D'UN CYCLE DE SCAN ───────────────────────
-def debut_cycle():
+def debut_cycle(source=None):
+    """Remet le bilan à zéro — pour une seule source en mode continu (chaque
+    source a son propre fil et son propre rythme de bilan)."""
     with _E.verrou:
-        _E.cycle = {}
+        if source is None:
+            _E.cycle = {}
+        else:
+            _E.cycle.pop(source, None)
 
 
 def bilan_cycle():

@@ -378,8 +378,12 @@ class ScraperVinted(_AvecBascule):
         self._nb_bruts = len(items)
         return [self._normaliser(item) for item in items[:limite]]
 
-    def scanner_mot_cle(self, mot_cle):
-        """Retourne la liste des résultats de traiter_annonce()."""
+    def scanner_mot_cle(self, mot_cle, sur_resultat=None):
+        """Retourne la liste des résultats de traiter_annonce().
+
+        sur_resultat(r) est appelé dès qu'une annonce est évaluée : la
+        notification part sans attendre la fin du lot (les vérifications
+        vendeur des annonces suivantes prennent plusieurs secondes)."""
         bruts = self.rechercher(mot_cle)
         if bruts is None:
             return []
@@ -391,6 +395,8 @@ class ScraperVinted(_AvecBascule):
             if r:
                 resultats.append(r)
                 nouveaux += int(r["nouvelle"])
+                if sur_resultat is not None:
+                    sur_resultat(r)
         ram_db.maj_scan_stat(self.source, mot_cle, requetes=1,
                              resultats=self._nb_bruts, nouveaux=nouveaux)
         return resultats
@@ -516,7 +522,7 @@ class ScraperLeboncoin(_AvecBascule):
         self._nb_bruts = len(bruts)
         return bruts
 
-    def scanner_mot_cle(self, mot_cle):
+    def scanner_mot_cle(self, mot_cle, sur_resultat=None):
         bruts = self.rechercher(mot_cle)
         if bruts is None:
             return []
@@ -528,6 +534,8 @@ class ScraperLeboncoin(_AvecBascule):
             if r:
                 resultats.append(r)
                 nouveaux += int(r["nouvelle"])
+                if sur_resultat is not None:
+                    sur_resultat(r)
         ram_db.maj_scan_stat(self.source, mot_cle, requetes=1,
                              resultats=self._nb_bruts, nouveaux=nouveaux)
         return resultats
