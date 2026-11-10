@@ -81,6 +81,7 @@ composants:
   marge_min_eur: 15
   marge_min_pct: 12
   # Prix AFFICHÉ maximum fixé à la main, par modèle (nom exact de la grille).
+  # Un nombre = les deux sites.
   # Remplace la règle de marge pour ce modèle : alerte dès que l'annonce est
   # à ce prix ou moins, même si la marge calculée est faible.
   prix_max_perso:
@@ -88,6 +89,10 @@ composants:
     RTX 3060 Ti: 210
     RTX 4060: 210
     RX 6700 XT: 210
+    Ryzen 5 5600X: 85
+    i5-12400F: 85
+    i7-10700K: 85
+    Ryzen 5 3600: {vinted: 45, leboncoin: 44}   # un prix par site, si besoin
   port_supplementaire_eur: {GPU: 3.0, MOBO: 2.0}   # colis plus lourds que la RAM
   # Prix observé : médiane des annonces vues, mélangée au prix de la grille.
   fenetre_jours: 30

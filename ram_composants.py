@@ -259,11 +259,14 @@ def _exclusion_titre(titre, r):
     return None
 
 
-def prix_max_perso(nom, cfg=None):
-    """Prix affiché maximum fixé à la main (composants.prix_max_perso), ou None."""
+def prix_max_perso(nom, cfg=None, source=None):
+    """Prix affiché maximum fixé à la main (composants.prix_max_perso), ou None.
+    Valeur : un nombre (les deux sites) ou {vinted: …, leboncoin: …}."""
     table = (cfg or ram_config.get()).val("composants.prix_max_perso", None) or {}
     for cle, valeur in table.items():
         if str(cle).strip().lower() == str(nom).strip().lower():
+            if isinstance(valeur, dict):
+                valeur = valeur.get(source)
             try:
                 return float(valeur)
             except (TypeError, ValueError):
@@ -353,7 +356,7 @@ def evaluer_annonce(brut, source, cfg=None, verif=None, modeles=None, refs=None)
                and marge_pct >= float(r["marge_min_pct"]))
     # Prix max fixé à la main pour ce modèle : il remplace la règle de marge
     # (c'est le prix AFFICHÉ de l'annonce, frais et port non compris).
-    perso = prix_max_perso(m.nom, cfg)
+    perso = prix_max_perso(m.nom, cfg, source)
     if perso is not None:
         affaire = prix <= perso
     if not affaire:

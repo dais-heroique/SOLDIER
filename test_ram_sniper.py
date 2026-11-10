@@ -2770,6 +2770,11 @@ def _():
     for nom, attendu in (("RTX 3070", 215), ("rtx 3060 ti", 210), ("RTX 4060", 210), ("RX 6700 XT", 210)):
         assert comp.prix_max_perso(nom, reel) == attendu, nom
     assert comp.prix_max_perso("RTX 3080", reel) is None
+    for nom in ("Ryzen 5 5600X", "i5-12400F", "i7-10700K"):
+        assert comp.prix_max_perso(nom, reel, "vinted") == comp.prix_max_perso(nom, reel, "leboncoin") == 85
+    assert comp.prix_max_perso("Ryzen 5 3600", reel, "vinted") == 45
+    assert comp.prix_max_perso("Ryzen 5 3600", reel, "leboncoin") == 44
+    assert comp.prix_max_perso("Ryzen 5 3600", reel) is None and comp.prix_max_perso("Ryzen 5 5600", reel) is None
     cfg = ram_config.Config({"composants": {"categories": ["GPU"],
                                             "prix_max_perso": {"RTX 3060 Ti": 210}}})
     verif = lambda brut: {"ok": True, "avis": 40, "note": 4.9}
