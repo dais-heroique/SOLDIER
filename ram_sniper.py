@@ -270,8 +270,11 @@ class Tournee:
     Deux voies, à débit de requêtes INCHANGÉ (delai_entre_requetes_s) :
       • rapide — quelques recherches larges, refaites toutes les 10-40 s :
         une annonce qui vient d'être publiée est vue en quelques secondes ;
-      • lente — tous les autres mots-clés et les recherches « composants »,
-        à tour de rôle, dans les créneaux laissés libres par la voie rapide.
+      • large — cartes graphiques, processeurs, cartes mères : des recherches
+        génériques (« rtx », « ryzen »…) toutes les 1 à 5 min, qui voient passer
+        TOUS les modèles ; le modèle exact est lu dans le titre ;
+      • lente — tous les autres mots-clés et les recherches par modèle,
+        à tour de rôle, dans les créneaux laissés libres.
     Avant, chaque mot-clé attendait son tour dans un cycle de plusieurs
     minutes, les deux sources l'une derrière l'autre.
     """
@@ -283,7 +286,7 @@ class Tournee:
         self._lente = []
 
     def suivante(self, cfg):
-        """("ram", mot) ou ("composant", None)."""
+        """("ram", mot), ("large", recherche composants) ou ("composant", None)."""
         source = self.scraper.source
         maintenant = self.horloge()
         rapides = mots_rapides(self.scraper, cfg)
@@ -293,6 +296,17 @@ class Tournee:
             if maintenant >= self._echeance.get(mot, 0):
                 self._echeance[mot] = maintenant + random.uniform(float(lo), float(hi))
                 return "ram", mot
+        if cfg.val("composants.actif", True):
+            r = ram_composants.reglages(cfg)
+            lo, hi = (r.get("larges_toutes_les_s") or {}).get(source, [120, 200])
+            for mot in (r.get("requetes_larges") or []):
+                cle = ("large", mot)
+                if cle not in self._echeance:
+                    # Premier passage étalé : pas de rafale au démarrage.
+                    self._echeance[cle] = maintenant + random.uniform(0, float(hi))
+                if maintenant >= self._echeance[cle]:
+                    self._echeance[cle] = maintenant + random.uniform(float(lo), float(hi))
+                    return "large", str(mot)
         if not self._lente:
             lents = [("ram", m) for m in self.scraper.mots_cles() if m not in rapides]
             if cfg.val("composants.actif", True):
@@ -342,10 +356,11 @@ def worker_source(scraper, cfg):
                 evals = ram_composants.scanner_source(scraper, cfg, limite=1,
                                                       arret=ARRET_SCAN)
                 STATS["annonces_vues"] += len(evals)
-                if any(e.get("statut") == "a_notifier" for e in evals):
-                    with _verrou_composants:
-                        ram_composants.notifier(cfg)
+            elif genre == "large":
+                evals = ram_composants.scanner_large(scraper, mot, cfg)
+                STATS["annonces_vues"] += len(evals)
             else:
+                evals = None
                 resultats = scraper.scanner_mot_cle(
                     mot, sur_resultat=lambda r: traiter_resultats([r], cfg))
                 STATS["annonces_vues"] += len(resultats)
@@ -353,6 +368,9 @@ def worker_source(scraper, cfg):
                 if nouvelles:
                     log("INFO", "scan", source=source, mot_cle=mot,
                         vues=len(resultats), nouvelles=nouvelles)
+            if evals and any(e.get("statut") == "a_notifier" for e in evals):
+                with _verrou_composants:
+                    ram_composants.notifier(cfg)
             STATS["dernier_scan"] = time.time()
         except Exception as e:
             STATS["erreurs"] += 1

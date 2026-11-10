@@ -2452,7 +2452,7 @@ def _():
     cfg = ram_config.Config({
         "sources": {"vinted": {"mots_cles_rapides": ["ddr4", "barrette ram"],
                                "rapide_toutes_les_s": [10, 10]}},
-        "composants": {"actif": True, "requetes_par_source": 2}})
+        "composants": {"actif": True, "requetes_par_source": 2, "requetes_larges": []}})
     tournee = ram_sniper.Tournee(_ScraperFactice(), horloge=lambda: t[0])
     assert [tournee.suivante(cfg) for _ in range(2)] == [("ram", "ddr4"), ("ram", "barrette ram")]
     lents = [tournee.suivante(cfg) for _ in range(5)]      # échéance pas atteinte : voie lente
@@ -2465,6 +2465,44 @@ def _():
     assert tournee.suivante(cfg)[1] not in ("ddr4", "barrette ram"), "puis la voie lente reprend"
     # Sans réglage : le premier mot-clé de la source sert de voie rapide.
     assert ram_sniper.mots_rapides(_ScraperFactice(), ram_config.Config({})) == ["ddr4"]
+
+
+@test("composants : recherches larges régulières, et « rtx » fait remonter une 3060 Ti et une 3070")
+def _():
+    import ram_sniper
+    t = [5000.0]
+    cfg = ram_config.Config({
+        "sources": {"vinted": {"mots_cles_rapides": ["ddr4"], "rapide_toutes_les_s": [1000, 1000]}},
+        "composants": {"categories": ["GPU", "CPU"], "requetes_par_source": 1,
+                       "requetes_larges": ["rtx", "ryzen"],
+                       "larges_toutes_les_s": {"vinted": [100, 100]}}})
+    tournee = ram_sniper.Tournee(_ScraperFactice(), horloge=lambda: t[0])
+    vus = []
+    for _ in range(40):                       # 40 créneaux de 5 s = 200 s
+        vus.append(tournee.suivante(cfg))
+        t[0] += 5
+    larges = [m for g, m in vus if g == "large"]
+    assert 2 <= larges.count("rtx") <= 3 and 2 <= larges.count("ryzen") <= 3, larges
+    assert any(g == "composant" for g, _ in vus) and any(m == "trident z" for _, m in vus), \
+        "les recherches par modèle et les autres mots-clés RAM continuent"
+    assert comp.reglages(ram_config.get())["requetes_larges"], "activé dans la vraie config"
+
+    class _S:
+        source, echecs_consecutifs, _nb_bruts = "vinted", 0, 3
+        def rechercher(self, mot):
+            assert mot == "rtx"
+            base = {"description": "Carte graphique utilisée deux ans, très bon état, facture",
+                    "image": "https://x/g.jpg", "vendeur_id": 9}
+            return [dict(base, id=1, url="https://vinted.fr/large/1", titre="MSI RTX 3060 Ti Gaming X", prix=120.0),
+                    dict(base, id=2, url="https://vinted.fr/large/2", titre="Gigabyte RTX 3070 Eagle 8Go", prix=260.0),
+                    dict(base, id=3, url="https://vinted.fr/large/3", titre="Boîte vide rtx", prix=5.0)]
+        def _verif_vendeur(self, brut):
+            return {"ok": True, "avis": 40, "note": 4.9}
+    evs = comp.scanner_large(_S(), "rtx", ram_config.Config({"composants": {"categories": ["GPU"]}}))
+    par_modele = {e.get("modele"): e["statut"] for e in evs}
+    assert par_modele.get("RTX 3060 Ti") == "a_notifier", evs      # 120 € pour ~230 €
+    assert par_modele.get("RTX 3070") in ("vue", "rejetee"), evs   # au prix du marché : vue, pas notifiée
+    assert len(evs) == 2, "la boîte vide n'est rattachée à aucun modèle"
 
 
 @test("scan continu : la notification est mise en file AVANT la fin du lot, et le blocage met en pause")

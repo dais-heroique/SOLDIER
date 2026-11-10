@@ -56,6 +56,12 @@ DEFAUTS = {
     "actif": True,
     "categories": ["CPU", "GPU", "MOBO"],
     "requetes_par_source": 6,
+    # Recherches LARGES (mode continu) : triées « plus récent d'abord », elles
+    # voient passer toute nouvelle carte graphique, tout processeur, toute
+    # carte mère, quel que soit le modèle — celui-ci est lu dans le titre.
+    "requetes_larges": ["rtx", "gtx", "carte graphique", "radeon rx",
+                        "ryzen", "intel core", "processeur", "carte mere"],
+    "larges_toutes_les_s": {"vinted": [90, 150], "leboncoin": [180, 300]},
     "prix_min_reference_eur": 25,
     "marge_min_eur": 15,
     "marge_min_pct": 12,
@@ -407,6 +413,55 @@ def requetes_du_passage(source, cfg=None, n=None, maintenant=None, modeles=None)
     return [q for _, q in notes[:n]]
 
 
+def scanner_requete(scraper, mot, cfg=None, modeles=None, refs=None):
+    """UNE recherche « composants » (modèle précis ou recherche large) :
+    évalue chaque annonce rendue. Retourne les évaluations nouvelles."""
+    cfg = cfg or ram_config.get()
+    refs = {} if refs is None else refs
+    evaluations = []
+    try:
+        bruts = scraper.rechercher(mot)
+    except Exception as e:
+        scraper.echecs_consecutifs = getattr(scraper, "echecs_consecutifs", 0) + 1
+        log("ERROR", "recherche composants en échec", source=scraper.source,
+            mot_cle=mot, erreur=str(e))
+        return evaluations
+    if bruts is None:
+        return evaluations
+    nouveaux = 0
+    for brut in bruts:
+        try:
+            ev = evaluer_annonce(brut, scraper.source, cfg,
+                                 verif=scraper._verif_vendeur,
+                                 modeles=modeles, refs=refs)
+        except Exception as e:
+            log("ERROR", "évaluation composant en échec",
+                url=brut.get("url"), erreur=str(e))
+            continue
+        if ev and ev["statut"] not in ("deja_vue",):
+            evaluations.append(ev)
+            nouveaux += int(ev["statut"] != "transitoire")
+    ram_db.maj_scan_stat(scraper.source, mot, requetes=1,
+                         resultats=getattr(scraper, "_nb_bruts", len(bruts)),
+                         nouveaux=nouveaux)
+    return evaluations
+
+
+def _journal(source, evaluations):
+    if evaluations:
+        compte = {}
+        for ev in evaluations:
+            compte[ev["statut"]] = compte.get(ev["statut"], 0) + 1
+        log("INFO", "composants", source=source, evaluations=compte)
+
+
+def scanner_large(scraper, mot, cfg=None):
+    """Recherche large de la voie rapide (sans pause : l'appelant cadence)."""
+    evaluations = scanner_requete(scraper, mot, cfg)
+    _journal(scraper.source, evaluations)
+    return evaluations
+
+
 def scanner_source(scraper, cfg=None, limite=None, arret=None, modeles=None):
     """Un passage « composants » sur une source (ScraperVinted/ScraperLeboncoin).
     Retourne les évaluations. Passe par les mêmes clients, la même bascule de
@@ -425,37 +480,10 @@ def scanner_source(scraper, cfg=None, limite=None, arret=None, modeles=None):
             log("WARN", "disjoncteur : composants mis de côté pour ce cycle",
                 source=scraper.source)
             break
-        try:
-            bruts = scraper.rechercher(mot)
-        except Exception as e:
-            scraper.echecs_consecutifs = getattr(scraper, "echecs_consecutifs", 0) + 1
-            log("ERROR", "recherche composants en échec", source=scraper.source,
-                mot_cle=mot, erreur=str(e))
-            continue
-        if bruts is not None:
-            nouveaux = 0
-            for brut in bruts:
-                try:
-                    ev = evaluer_annonce(brut, scraper.source, cfg,
-                                         verif=scraper._verif_vendeur,
-                                         modeles=modeles, refs=refs)
-                except Exception as e:
-                    log("ERROR", "évaluation composant en échec",
-                        url=brut.get("url"), erreur=str(e))
-                    continue
-                if ev and ev["statut"] not in ("deja_vue",):
-                    evaluations.append(ev)
-                    nouveaux += int(ev["statut"] != "transitoire")
-            ram_db.maj_scan_stat(scraper.source, mot, requetes=1,
-                                 resultats=getattr(scraper, "_nb_bruts", len(bruts)),
-                                 nouveaux=nouveaux)
+        evaluations += scanner_requete(scraper, mot, cfg, modeles=modeles, refs=refs)
         ram_scrapers._pause(
             cfg.val(f"sources.{scraper.source}.delai_entre_requetes_s", [2.5, 5.0]))
-    if evaluations:
-        compte = {}
-        for ev in evaluations:
-            compte[ev["statut"]] = compte.get(ev["statut"], 0) + 1
-        log("INFO", "composants", source=scraper.source, evaluations=compte)
+    _journal(scraper.source, evaluations)
     return evaluations
 
 

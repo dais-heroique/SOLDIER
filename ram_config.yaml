@@ -71,6 +71,12 @@ composants:
   # Recherches par source et par passage (en plus des mots-clés RAM). C'est LE
   # réglage qui pèse sur le risque de blocage : 6 → ~36 requêtes/heure/source.
   requetes_par_source: 6
+  # Mode continu — recherches LARGES, plus récent d'abord : toute nouvelle
+  # carte graphique / processeur / carte mère y passe, quel que soit le modèle
+  # (3060 Ti, 3070, 5600X… : lu dans le titre). Les recherches par modèle
+  # ci-dessus continuent en fond pour les titres sans ces mots.
+  requetes_larges: [rtx, gtx, carte graphique, radeon rx, ryzen, intel core, processeur, carte mere]
+  larges_toutes_les_s: {vinted: [90, 150], leboncoin: [180, 300]}
   prix_min_reference_eur: 25    # modèles à moins de 25 € : marge trop faible
   marge_min_eur: 15
   marge_min_pct: 12
