@@ -1,7 +1,8 @@
 """
 vinted_client.py — Client Vinted (multi-pays, diagnostic intégré)
 ═══════════════════════════════════════════════════════════════════════════
-Interroge l'API interne de Vinted (/api/v2/catalog/items). Points durcis
+Interroge Vinted : page de recherche /catalog (l'API /api/v2/catalog/items a
+été supprimée par Vinted en 2026, voir extraire_items_catalogue). Points durcis
 par rapport à la version précédente, suite à un diagnostic (aucune offre
 Vinted ne remontait jamais) :
 
@@ -22,6 +23,7 @@ Affiche étape par étape ce qui se passe (récupération du cookie, requête
 de recherche, nombre de résultats) avec le détail de toute erreur.
 """
 
+import json
 import time
 import random
 import re
@@ -79,6 +81,41 @@ class VintedError(Exception):
         super().__init__(message)
         self.status = status
         self.body = body
+
+
+# ─────────────────────────────────────────────────────────────
+#  Lecture de la page de recherche (depuis novembre 2026)
+# ─────────────────────────────────────────────────────────────
+# Vinted a supprimé /api/v2/catalog/items (404 même depuis un vrai navigateur).
+# La page /catalog est désormais rendue côté serveur (Next.js) et embarque la
+# liste des annonces en JSON dans des appels self.__next_f.push([1,"..."]).
+# On lit ce JSON ; l'ancienne API reste en secours si la page change encore.
+_RE_FLIGHT = re.compile(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
+_CLE_ITEMS = '"items":{"items":'
+
+
+def extraire_items_catalogue(html):
+    """Liste des annonces (dicts bruts) contenues dans une page /catalog, ou
+    None si la structure n'est pas reconnue (page de blocage, refonte...).
+    Une recherche sans résultat rend [] (structure reconnue, liste vide)."""
+    morceaux = []
+    for m in _RE_FLIGHT.finditer(html or ""):
+        try:
+            morceaux.append(json.loads(m.group(1)))
+        except ValueError:
+            continue
+    flux = "".join(morceaux)
+    k = flux.find(_CLE_ITEMS)
+    if k < 0:
+        return None
+    debut = flux.find("[", k + len(_CLE_ITEMS) - 1)
+    if debut < 0:
+        return None
+    try:
+        liste, _ = json.JSONDecoder().raw_decode(flux[debut:])
+    except ValueError:
+        return None
+    return liste if isinstance(liste, list) else None
 
 
 class VintedClient:
@@ -183,9 +220,13 @@ class VintedClient:
         return params
 
     def search(self, query_url=None, search_text=None, price_to=None,
-               max_retries=3):
+               max_retries=3, max_items=40):
         """Recherche par URL Vinted OU par texte simple. Lève VintedError
-        avec un message clair en cas d'échec (plus de silence)."""
+        avec un message clair en cas d'échec (plus de silence).
+
+        Lit d'abord la page /catalog (rendue côté serveur) ; si sa structure
+        n'est plus reconnue, retombe sur l'ancienne API JSON. max_items borne
+        le nombre d'annonces rendues (les plus récentes d'abord)."""
         if query_url:
             params = self.parse_query_url(query_url)
         else:
@@ -194,6 +235,61 @@ class VintedClient:
             if price_to:
                 params["price_to"] = str(price_to)
 
+        try:
+            items = self._search_catalogue(params, max_retries)
+            if items is not None:
+                return [self._normalize_catalogue(it) for it in items[:max_items]]
+            self._log("page /catalog non reconnue — essai de l'ancienne API")
+        except VintedError as e:
+            if e.status in (401, 403, 429) or e.status is None:
+                raise
+            self._log(f"page /catalog : {e} — essai de l'ancienne API")
+        return self._search_api(params, max_retries)
+
+    def _search_catalogue(self, params, max_retries):
+        """Annonces brutes de la page /catalog, ou None si structure inconnue."""
+        page_params = {k: v for k, v in params.items() if k != "per_page"}
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                self._ensure_session(force=(attempt > 0))
+            except VintedError as e:
+                last_err = e
+                self._log(f"tentative {attempt+1}/{max_retries}: cookie KO ({e})")
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            try:
+                r = self.session.get(
+                    self.host + "/catalog", params=page_params, timeout=25,
+                    headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
+                self._log(f"GET {self.host}/catalog {page_params} -> HTTP {r.status_code}")
+                if r.status_code == 200:
+                    return extraire_items_catalogue(r.text)
+                if r.status_code in (401, 403):
+                    last_err = VintedError(f"bloqué par Vinted/Datadome (HTTP {r.status_code}) "
+                                           f"— cookie rejeté, nouvelle tentative avec cookie frais",
+                                           status=r.status_code, body=r.text[:300])
+                    self._cookie_ok = False
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                if r.status_code == 429:
+                    last_err = VintedError("trop de requêtes (HTTP 429) — pause plus longue nécessaire",
+                                           status=429)
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                last_err = VintedError(f"page de recherche : HTTP {r.status_code} inattendu",
+                                       status=r.status_code, body=r.text[:300])
+                time.sleep(1.5)
+            except VintedError:
+                raise
+            except Exception as e:
+                last_err = VintedError(f"erreur réseau: {e}")
+                self._log(f"tentative {attempt+1}/{max_retries}: {e}")
+                time.sleep(1.5 * (attempt + 1))
+        raise last_err or VintedError("échec de recherche sans détail")
+
+    def _search_api(self, params, max_retries):
+        """Ancienne API JSON (secours — supprimée par Vinted en 2026)."""
         last_err = None
         for attempt in range(max_retries):
             try:
@@ -368,6 +464,49 @@ class VintedClient:
             "source": "vinted",
             "posted_ts": posted_ts,
             "ships": True,  # Vinted intègre systématiquement l'envoi (étiquette prépayée)
+        }
+
+    def _normalize_catalogue(self, entree):
+        """Annonce de la page /catalog -> même dict que _normalize().
+
+        Le prix retenu est celui de l'annonce, SANS les frais de protection
+        acheteur : ram_scoring.frais_acquisition() les ajoute lui-même."""
+        it = entree.get("productItem") if isinstance(entree, dict) else None
+        it = it or entree or {}
+
+        def montant(champ):
+            v = it.get(champ)
+            try:
+                return float(v.get("amount")) if isinstance(v, dict) else float(v)
+            except (TypeError, ValueError, AttributeError):
+                return 0.0
+
+        prix = to_eur(montant("price"), self.currency)
+        url = it.get("url") or ""
+        if url.startswith("/"):
+            url = self.host + url
+        photos = []
+        for ph in (it.get("photos") or []):
+            u = ph.get("url") if isinstance(ph, dict) else None
+            if u and u not in photos:
+                photos.append(u)
+        box = it.get("itemBox") if isinstance(it.get("itemBox"), dict) else {}
+        user = it.get("user") if isinstance(it.get("user"), dict) else {}
+        marque, etat = box.get("firstLine") or "", box.get("secondLine") or ""
+        return {
+            "id": it.get("id") or entree.get("id"),
+            "vendeur_id": user.get("id"),
+            "vendeur_pseudo": None,
+            "subject": it.get("title") or "",
+            "price": int(round(prix)),
+            "url": url,
+            "image": photos[0] if photos else (it.get("thumbnailUrl") or ""),
+            "photos": photos,
+            "location": "Vinted",
+            "description": ", ".join(x for x in (marque, etat) if x),
+            "source": "vinted",
+            "posted_ts": None,  # la page n'expose plus de date : on suit l'ordre « plus récent »
+            "ships": True,
         }
 
 
