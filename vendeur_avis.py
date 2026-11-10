@@ -27,9 +27,9 @@ import time
 # Un profil vendeur change lentement : 6 h de cache suffisent largement.
 TTL_S = 6 * 3600
 # Après un échec de lecture, on ne réinterroge pas ce vendeur pendant 10 min.
-TTL_ECHEC_S = 600
+TTL_ECHEC_S = 60     # un profil illisible est retenté vite : l'affaire n'attend pas 10 min
 # Pause avant chaque requête profil (les tests la mettent à (0, 0)).
-PAUSE_S = (0.8, 2.0)
+PAUSE_S = (0.3, 0.8)   # courte : c'est du temps pris sur l'alerte
 
 _CACHE = {}    # (source, vendeur_id) -> (horodatage, info)
 _ECHECS = {}   # (source, vendeur_id) -> (horodatage, message)

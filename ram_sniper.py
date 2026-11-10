@@ -55,6 +55,7 @@ ARRET = threading.Event()
 # le worker de notification finit d'envoyer ce qui est en file.
 ARRET_SCAN = threading.Event()
 _reveil_notif = threading.Event()        # une annonce vient d'entrer en file
+_essais_notif = {}                       # annonce -> envois Telegram ratés d'affilée
 _verrou_composants = threading.Lock()    # un seul envoi « composants » à la fois
 
 # File de notification : tas trié par score décroissant. Une annonce à 88 ne
@@ -255,65 +256,111 @@ def _attendre_scan(secondes):
         time.sleep(min(1.0, max(0.05, fin - time.time())))
 
 
+def _cadences(valeur, defaut):
+    """[(mot, lo, hi)] depuis une liste (cadence par défaut) ou un dict
+    {mot: [lo, hi]} (cadence propre à chaque recherche)."""
+    lo0, hi0 = float(defaut[0]), float(defaut[1])
+    sortie = []
+    if isinstance(valeur, dict):
+        for mot, plage in valeur.items():
+            try:
+                lo, hi = float(plage[0]), float(plage[1])
+            except (TypeError, ValueError, IndexError):
+                lo, hi = lo0, hi0
+            sortie.append((str(mot), min(lo, hi), max(lo, hi)))
+    else:
+        sortie = [(str(m), lo0, hi0) for m in (valeur or [])]
+    return sortie
+
+
+def cadences_rapides(scraper, cfg):
+    """Voie rapide RAM : recherches larges, triées « plus récent d'abord »,
+    où toute nouvelle annonce apparaît en tête."""
+    source = scraper.source
+    defaut = cfg.val(f"sources.{source}.rapide_toutes_les_s",
+                     RAPIDE_DEFAUT_S.get(source, [20, 30]))
+    liste = _cadences(cfg.val(f"sources.{source}.mots_cles_rapides", None), defaut)
+    if not liste:
+        liste = _cadences(scraper.mots_cles()[:1], defaut)
+    return liste
+
+
+def cadences_larges(source, cfg):
+    """Recherches larges « composants » (rtx, ryzen…) et leur cadence."""
+    if not cfg.val("composants.actif", True):
+        return []
+    propres = cfg.val(f"sources.{source}.composants_larges", None)
+    if propres:
+        return _cadences(propres, [120, 200])
+    r = ram_composants.reglages(cfg)
+    return _cadences(r.get("requetes_larges"),
+                     (r.get("larges_toutes_les_s") or {}).get(source, [120, 200]))
+
+
 def mots_rapides(scraper, cfg):
-    """Mots-clés de la voie rapide : les recherches larges, triées « plus
-    récent d'abord », où toute nouvelle annonce apparaît en tête."""
-    rapides = cfg.val(f"sources.{scraper.source}.mots_cles_rapides", None)
-    if not rapides:
-        rapides = scraper.mots_cles()[:1]
-    return [str(m) for m in rapides]
+    return [m for m, _, _ in cadences_rapides(scraper, cfg)]
 
 
 class Tournee:
     """Ordre des recherches d'une source en mode continu.
 
-    Deux voies, à débit de requêtes INCHANGÉ (delai_entre_requetes_s) :
-      • rapide — quelques recherches larges, refaites toutes les 10-40 s :
-        une annonce qui vient d'être publiée est vue en quelques secondes ;
-      • large — cartes graphiques, processeurs, cartes mères : des recherches
-        génériques (« rtx », « ryzen »…) toutes les 1 à 5 min, qui voient passer
-        TOUS les modèles ; le modèle exact est lu dans le titre ;
-      • lente — tous les autres mots-clés et les recherches par modèle,
-        à tour de rôle, dans les créneaux laissés libres.
-    Avant, chaque mot-clé attendait son tour dans un cycle de plusieurs
-    minutes, les deux sources l'une derrière l'autre.
+    Chaque recherche fréquente a SA cadence ; à chaque créneau on sert la
+    plus en retard :
+      • rapide — RAM (« ddr4 » toutes les ~10 s) : une annonce qui vient
+        d'être publiée est vue en quelques secondes ;
+      • large — cartes graphiques, processeurs, cartes mères : « rtx »,
+        « ryzen »… voient passer TOUS les modèles, lus ensuite dans le titre ;
+      • lente — les autres mots-clés et les recherches par modèle, à tour de
+        rôle dans les créneaux libres (profondeur : annonces de la nuit,
+        titres atypiques). Un créneau sur MAX_RAPIDES_D_AFFILEE + 1 lui est
+        garanti, même si les voies fréquentes sont saturées.
     """
+
+    MAX_RAPIDES_D_AFFILEE = 5
 
     def __init__(self, scraper, horloge=time.time):
         self.scraper = scraper
         self.horloge = horloge
-        self._echeance = {}      # mot rapide -> prochain passage
+        self._echeance = {}      # (genre, mot) -> prochain passage
         self._lente = []
+        self._d_affilee = 0
+
+    def _frequentes(self, cfg):
+        source = self.scraper.source
+        return ([("ram", m, lo, hi) for m, lo, hi in cadences_rapides(self.scraper, cfg)]
+                + [("large", m, lo, hi) for m, lo, hi in cadences_larges(source, cfg)])
 
     def suivante(self, cfg):
         """("ram", mot), ("large", recherche composants) ou ("composant", None)."""
-        source = self.scraper.source
         maintenant = self.horloge()
-        rapides = mots_rapides(self.scraper, cfg)
-        lo, hi = cfg.val(f"sources.{source}.rapide_toutes_les_s",
-                         RAPIDE_DEFAUT_S.get(source, [20, 30]))
-        for mot in rapides:
-            if maintenant >= self._echeance.get(mot, 0):
-                self._echeance[mot] = maintenant + random.uniform(float(lo), float(hi))
-                return "ram", mot
-        if cfg.val("composants.actif", True):
-            r = ram_composants.reglages(cfg)
-            lo, hi = (r.get("larges_toutes_les_s") or {}).get(source, [120, 200])
-            for mot in (r.get("requetes_larges") or []):
-                cle = ("large", mot)
-                if cle not in self._echeance:
-                    # Premier passage étalé : pas de rafale au démarrage.
-                    self._echeance[cle] = maintenant + random.uniform(0, float(hi))
-                if maintenant >= self._echeance[cle]:
-                    self._echeance[cle] = maintenant + random.uniform(float(lo), float(hi))
-                    return "large", str(mot)
+        frequentes = self._frequentes(cfg)
+        meilleur, retard_max = None, -1.0
+        for genre, mot, lo, hi in frequentes:
+            cle = (genre, mot)
+            if cle not in self._echeance:
+                # RAM : tout de suite. Composants : premier passage étalé,
+                # pas de rafale au démarrage.
+                self._echeance[cle] = maintenant + (
+                    0 if genre == "ram" else random.uniform(0, hi))
+            retard = (maintenant - self._echeance[cle]) / max(hi, 1.0)
+            if retard >= 0 and retard > retard_max:
+                meilleur, retard_max = (genre, mot, lo, hi), retard
+        if meilleur and self._d_affilee < self.MAX_RAPIDES_D_AFFILEE:
+            genre, mot, lo, hi = meilleur
+            self._echeance[(genre, mot)] = maintenant + random.uniform(lo, hi)
+            self._d_affilee += 1
+            return genre, mot
+        self._d_affilee = 0
         if not self._lente:
+            rapides = {m for g, m, _, _ in frequentes if g == "ram"}
             lents = [("ram", m) for m in self.scraper.mots_cles() if m not in rapides]
             if cfg.val("composants.actif", True):
                 n = int(ram_composants.reglages(cfg)["requetes_par_source"])
                 lents += [("composant", None)] * max(0, n)
             random.shuffle(lents)      # pas de motif régulier côté anti-bot
             self._lente = lents or [("ram", m) for m in rapides]
+        if not self._lente:            # source sans aucun mot-clé
+            return (frequentes[0][0], frequentes[0][1]) if frequentes else ("composant", None)
         return self._lente.pop()
 
 
@@ -329,9 +376,27 @@ def worker_source(scraper, cfg):
     log("INFO", "scan continu démarré", source=source,
         rapides=mots_rapides(scraper, cfg))
 
+    mesure = {"n": 0, "duree": 0.0, "nouvelles": 0}
+
     def bilan():
         alerter_sorties(ram_config.get(), [source])
+        sortie = (reseau.bilan_cycle().get(source) or {}).get("ok")
         reseau.debut_cycle(source)
+        # Filet : une affaire « composants » dont l'envoi Telegram a échoué
+        # repart ici, sans attendre qu'une autre affaire se présente.
+        try:
+            with _verrou_composants:
+                ram_composants.notifier(ram_config.get())
+        except Exception as e:
+            log("WARN", "notifications composants en échec", erreur=str(e))
+        if mesure["n"]:
+            # Le rythme réel, visible dans les logs : c'est lui qui dit si le
+            # bot est aussi rapide que prévu.
+            log("INFO", "rythme", source=source, recherches=mesure["n"],
+                duree_moy_s=round(mesure["duree"] / mesure["n"], 2),
+                nouvelles=mesure["nouvelles"],
+                sortie=sortie)
+            mesure.update(n=0, duree=0.0, nouvelles=0)
 
     while not _scan_fini():
         cfg = ram_config.get()
@@ -350,6 +415,7 @@ def worker_source(scraper, cfg):
             continue
 
         genre, mot = tournee.suivante(cfg)
+        t0 = time.time()
         try:
             if genre == "composant":
                 # scanner_source fait sa propre pause après la requête.
@@ -365,6 +431,7 @@ def worker_source(scraper, cfg):
                     mot, sur_resultat=lambda r: traiter_resultats([r], cfg))
                 STATS["annonces_vues"] += len(resultats)
                 nouvelles = sum(1 for r in resultats if r["nouvelle"])
+                mesure["nouvelles"] += nouvelles
                 if nouvelles:
                     log("INFO", "scan", source=source, mot_cle=mot,
                         vues=len(resultats), nouvelles=nouvelles)
@@ -376,6 +443,8 @@ def worker_source(scraper, cfg):
             STATS["erreurs"] += 1
             scraper.echecs_consecutifs = getattr(scraper, "echecs_consecutifs", 0) + 1
             log("ERROR", "scan en échec", source=source, mot_cle=mot, erreur=str(e))
+        mesure["n"] += 1
+        mesure["duree"] += time.time() - t0
         if scraper.echecs_consecutifs == 0:
             blocages = 0
 
@@ -632,10 +701,21 @@ def worker_notification(cfg):
                 url=annonce.get("url"))
         except ram_telegram.TelegramError as e:
             STATS["erreurs"] += 1
-            # L'annonce reste en statut « nouveau » : la reprise périodique la
-            # remettra en file. Un échec d'envoi ne fait pas perdre l'affaire.
+            # Nouvel essai rapide (3 s, 6 s, 12 s…) : attendre la reprise
+            # périodique (5 min) ferait arriver l'alerte trop tard. Au-delà de
+            # 5 essais l'annonce reste « nouveau » et la reprise la reprendra.
+            essais = _essais_notif.get(annonce_id, 0) + 1
+            _essais_notif[annonce_id] = essais
             log("ERROR", "notification en échec — sera retentée", annonce=annonce_id,
-                erreur=str(e))
+                essai=essais, erreur=str(e))
+            if essais <= 5:
+                ARRET.wait(min(3 * 2 ** (essais - 1), 30))
+                with _verrou_notif:
+                    heapq.heappush(_file_notif, entree)
+            else:
+                _essais_notif.pop(annonce_id, None)
+            continue
+        _essais_notif.pop(annonce_id, None)
 
 
 # ─────────────────────── WORKER VISION ───────────────────────
@@ -1127,6 +1207,7 @@ def executer_continu(cfg=None, duree_s=None, pas_s=1.0):
 
     fin = time.time() + duree_s
     dernier_entretien = time.time()
+    entretien = None
     motif = "durée"
     while True:
         if signal_recu.is_set():
@@ -1137,15 +1218,21 @@ def executer_continu(cfg=None, duree_s=None, pas_s=1.0):
         if not test_hors_plage and not dans_plage_horaire(cfg):
             motif = "plage"
             break
-        if time.time() - dernier_entretien >= 60:
+        if time.time() - dernier_entretien >= 60 and not (entretien and entretien.is_alive()):
             dernier_entretien = time.time()
             cfg = ram_config.get()
-            for tache in (lambda: signe_de_vie(cfg), lambda: maintenance_quotidienne(cfg),
-                          reseau.sauver, _checkpoint_base, _ecrire_sante):
-                try:
-                    tache()
-                except Exception as e:
-                    log("WARN", "tâche périodique en échec", erreur=str(e))
+
+            def _entretien(cfg=cfg):
+                for tache in (lambda: signe_de_vie(cfg), reseau.sauver, _checkpoint_base,
+                              _ecrire_sante, lambda: maintenance_quotidienne(cfg)):
+                    try:
+                        tache()
+                    except Exception as e:
+                        log("WARN", "tâche périodique en échec", erreur=str(e))
+            # Dans son propre fil : le calibrage quotidien dure plusieurs
+            # minutes et ne doit pas rendre la session sourde à l'arrêt.
+            entretien = threading.Thread(target=_entretien, name="ram-entretien", daemon=True)
+            entretien.start()
         time.sleep(pas_s)
 
     if motif == "signal":

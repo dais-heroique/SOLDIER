@@ -235,16 +235,27 @@ class VintedClient:
             if price_to:
                 params["price_to"] = str(price_to)
 
+        non_reconnue = False
         try:
             items = self._search_catalogue(params, max_retries)
             if items is not None:
                 return [self._normalize_catalogue(it) for it in items[:max_items]]
+            non_reconnue = True
             self._log("page /catalog non reconnue — essai de l'ancienne API")
         except VintedError as e:
             if e.status in (401, 403, 429) or e.status is None:
                 raise
             self._log(f"page /catalog : {e} — essai de l'ancienne API")
-        return self._search_api(params, max_retries)
+        try:
+            return self._search_api(params, max_retries)
+        except VintedError as e:
+            if non_reconnue and e.status not in (401, 403, 429, None):
+                # Page servie en 200 mais sans annonces lisibles : défi
+                # anti-bot (ou refonte du site). « non-JSON » = signal de
+                # blocage pour l'appelant, qui change alors de sortie réseau.
+                raise VintedError("réponse non-JSON : page de recherche non reconnue "
+                                  "(défi anti-bot ou refonte du site)", status=200)
+            raise
 
     def _search_catalogue(self, params, max_retries):
         """Annonces brutes de la page /catalog, ou None si structure inconnue."""
@@ -264,7 +275,12 @@ class VintedClient:
                     headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
                 self._log(f"GET {self.host}/catalog {page_params} -> HTTP {r.status_code}")
                 if r.status_code == 200:
-                    return extraire_items_catalogue(r.text)
+                    items = extraire_items_catalogue(r.text)
+                    if items is None and "captcha-delivery" in r.text:
+                        # Défi Datadome servi en 200 : c'est un blocage.
+                        raise VintedError("bloqué par Vinted/Datadome (défi anti-bot)",
+                                          status=403, body=r.text[:300])
+                    return items
                 if r.status_code in (401, 403):
                     last_err = VintedError(f"bloqué par Vinted/Datadome (HTTP {r.status_code}) "
                                            f"— cookie rejeté, nouvelle tentative avec cookie frais",

@@ -135,7 +135,25 @@ jobs:
 
       - name: Session continue
         id: session
-        run: python ram_sniper.py --continu
+        # exec : Python reçoit lui-même le signal d'annulation de GitHub et
+        # sauvegarde proprement (sinon c'est bash qui le reçoit, et Python
+        # est tué sans prévenir).
+        run: exec python ram_sniper.py --continu
+
+      # Si la session a été tuée net (annulation, panne), les dernières
+      # écritures sont encore dans le journal SQLite (soldier.db-wal), qui
+      # n'est pas sauvegardé : on les fusionne dans soldier.db avant.
+      - name: Consolider la base
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, sqlite3
+          if os.path.exists("soldier.db"):
+              c = sqlite3.connect("soldier.db", timeout=20)
+              print("checkpoint :", c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone())
+              c.close()
+          PY
+        continue-on-error: true
 
       - name: Sauvegarder la base et l'état réseau
         if: always()
