@@ -38,3 +38,4 @@ ram_config.local.yaml
 # État des sorties réseau du bot (bascule automatique)
 .sorties_etat.json
 .sorties_*.tmp
+alertes-envoyees.json

@@ -1256,6 +1256,13 @@ def executer_continu(cfg=None, duree_s=None, pas_s=1.0):
                 t.join(timeout=10)
     _checkpoint_base()
     reseau.sauver()
+    try:
+        # Relu avec « analyse les annonces » : téléchargé depuis l'onglet
+        # Actions (artefact « alertes-envoyees »).
+        n = ram_composants.exporter_alertes("alertes-envoyees.json", jours=2)
+        log("INFO", "alertes exportées", fichier="alertes-envoyees.json", alertes=n)
+    except Exception as e:
+        log("WARN", "export des alertes impossible", erreur=str(e))
 
     relais = motif == "durée" and not test_hors_plage and dans_plage_horaire(cfg)
     _publier_relais(relais)
@@ -1329,6 +1336,7 @@ OPTIONS = {
     "--once": "un seul tour de scan puis sortie",
     "--ci": "un passage complet (scan + notifications) puis sortie — hébergement cron",
     "--continu": "session longue sans arrêt (hébergement en ligne, relais automatique)",
+    "--export-alertes": "écrit alertes-envoyees.json (alertes des 2 derniers jours)",
     "--dashboard": "sert le dashboard web (défaut : port 8010)",
     "--diag": "explique pourquoi les annonces sont rejetées",
     "--replay": "rejoue les annonces archivées à travers le scoring courant",
@@ -1470,6 +1478,12 @@ def main():
         print("  • Pour arrêter l'instance en cours : Ctrl+C dans son terminal")
         print("  • Pour passer outre malgré tout : --force\n")
         sys.exit(1)
+
+    if "--export-alertes" in args:
+        ram_db.init_db()
+        n = ram_composants.exporter_alertes("alertes-envoyees.json", jours=2)
+        print(f"{n} alerte(s) → alertes-envoyees.json")
+        sys.exit(0)
 
     if "--continu" in args:
         sys.exit(executer_continu(cfg))
