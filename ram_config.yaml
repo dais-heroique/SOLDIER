@@ -14,6 +14,11 @@ ci:
   budget_notifications_s: 240   # temps laissé à l'envoi Telegram après le scan
   calibrage_annonces: 30        # calibrage quotidien borné (pas de rafale)
   echec_si_bloque: false        # true = run rouge (e-mail GitHub) quand tout est bloqué
+  # Mode continu (ram_sniper.py --continu) : le bot tourne sans arrêt. Un job
+  # GitHub est limité à 6 h : la session s'arrête avant, et la suivante prend
+  # le relais toute seule (une à deux minutes de coupure).
+  duree_session_min: 320
+  duree_test_min: 15            # lancement manuel HORS plage : simple test
   # Plage horaire (heure de Paris, fin exclue) : en dehors, le passage est
   # ignoré. 7-23 = de 07:00 à 22:59. [0, 24] = 24 h/24. La variable GitHub
   # SNIPER_HEURES (ex. « 9-18 ») prend le pas, sans commit.
@@ -267,6 +272,11 @@ sources:
     actif: true
     priorite: 1
     delai_par_mot_cle_s: [30, 45]     # étalé, jamais en rafale
+    # Voie rapide (mode continu) : ces recherches larges reviennent toutes
+    # les 12-20 s ; les autres mots-clés tournent dans les créneaux restants.
+    # Le débit total (delai_entre_requetes_s) ne change pas.
+    mots_cles_rapides: [ddr4, barrette ram]
+    rapide_toutes_les_s: [12, 20]
     delai_entre_requetes_s: [2.5, 5.0]
     max_resultats_par_requete: 20
     backoff_429_s: [60, 120, 300, 600]
@@ -297,6 +307,8 @@ sources:
     actif: true
     priorite: 2
     delai_par_mot_cle_s: [60, 90]     # anti-bot plus agressif
+    mots_cles_rapides: [ddr4]         # voie rapide (voir vinted)
+    rapide_toutes_les_s: [25, 40]
     delai_entre_requetes_s: [5.0, 9.0]
     max_resultats_par_requete: 35
     backoff_429_s: [120, 300, 900, 1800]
@@ -350,8 +362,8 @@ telegram:
   # le rythme retombe à une par `anti_spam_s`. Sans la rafale, trois bonnes
   # affaires publiées dans la même minute donnaient UNE seule alerte et les
   # deux autres arrivaient trop tard.
-  anti_spam_s: 60               # rythme de croisière : 1 notification / 60 s
-  rafale_max: 4                 # mais jusqu'à 4 d'affilée sur un coup de bourre
+  anti_spam_s: 30               # rythme de croisière : 1 notification / 30 s
+  rafale_max: 6                 # mais jusqu'à 6 d'affilée sur un coup de bourre
 
   # Deux machines (ton Mac + le PC de ton binôme) peuvent tourner en même temps
   # sur le MÊME groupe Telegram. L'API n'autorisant qu'un seul getUpdates par

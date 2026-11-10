@@ -1,11 +1,17 @@
-name: RAM Sniper (scan planifié)
+name: RAM Sniper (en continu)
 
-# Un passage toutes les ~10 minutes : scan Vinted + Leboncoin, filtre vendeur
-# (≥ 1 avis), notifications Telegram. Gratuit sur un dépôt PUBLIC.
+# Le bot tourne SANS ARRÊT pendant la plage horaire, comme sur un ordinateur :
+# une session de ~5 h 20 (un job GitHub est limité à 6 h), puis la suivante
+# prend le relais toute seule. Vinted et Leboncoin sont scannés en parallèle,
+# les recherches larges toutes les 12-40 s, et chaque affaire part sur
+# Telegram dès qu'elle est évaluée. Gratuit sur un dépôt PUBLIC.
+#
+# Le cron ne lance plus de passage : il sert de CHIEN DE GARDE. Toutes les
+# 10 min il vérifie qu'une session tourne, et en démarre une sinon (début de
+# journée, session tombée).
 #
 # Anti-blocage (README §10) : chaque requête bloquée repart aussitôt par la
-# sortie réseau suivante — direct → maison (Tailscale) → WARP → proxys — et
-# l'état des sorties est gardé d'un passage à l'autre.
+# sortie réseau suivante — direct → maison (Tailscale) → WARP → proxys.
 #
 # Secrets (Settings → Secrets and variables → Actions) :
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   obligatoires
@@ -15,22 +21,24 @@ name: RAM Sniper (scan planifié)
 # Variables (onglet Variables) :
 #   SNIPER_WARP    auto (défaut) | toujours | jamais
 #   SNIPER_HEURES  plage horaire, heure de Paris, fin exclue (défaut 7-23 ;
-#                  « 0-24 » = tout le temps). Un lancement manuel l'ignore.
+#                  « 0-24 » = tout le temps). Un lancement manuel hors plage
+#                  tourne 15 min, pour tester.
 
 on:
   schedule:
     # Cron en UTC, volontairement large (couvre 7h-23h Paris été comme hiver) ;
     # la plage exacte est vérifiée à chaque passage (job « plage »).
-    - cron: "*/10 5-21 * * *"  # GitHub peut retarder ou sauter des passages (README §10)
+    - cron: "*/10 5-21 * * *"  # chien de garde (GitHub peut le retarder de quelques minutes)
   workflow_dispatch:
-
-concurrency:
-  group: ram-sniper
-  cancel-in-progress: false    # jamais deux passages en parallèle (double requêtes)
+    inputs:
+      relais:
+        description: "Relais automatique entre deux sessions (laisser vide à la main)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
-  actions: write               # pour garder le planificateur actif (dernière étape)
+  actions: write               # relais entre sessions + planificateur gardé actif
 
 jobs:
   # Décide, en quelques secondes et sans rien installer, si l'heure (Paris)
@@ -45,6 +53,9 @@ jobs:
         env:
           EVENEMENT: ${{ github.event_name }}
           SNIPER_HEURES: ${{ vars.SNIPER_HEURES || '7-23' }}
+          GH_TOKEN: ${{ github.token }}
+          DEPOT: ${{ github.repository }}
+          CE_RUN: ${{ github.run_id }}
         run: |
           h="$(TZ=Europe/Paris date +%-H)"
           debut="${SNIPER_HEURES%-*}"; fin="${SNIPER_HEURES#*-}"
@@ -56,6 +67,16 @@ jobs:
           else
             if [ "$h" -ge "$debut" ] || [ "$h" -lt "$fin" ]; then actif=true; fi
           fi
+          # Chien de garde : si une session tourne (ou attend) déjà, ne rien lancer.
+          if [ "$actif" = "true" ] && [ "$EVENEMENT" = "schedule" ]; then
+            autres="$(gh api "repos/${DEPOT}/actions/workflows/ram-sniper.yml/runs?per_page=30" \
+              --jq "[.workflow_runs[] | select(.status != \"completed\" and .id != ${CE_RUN})] | length" \
+              2>/dev/null || echo 0)"
+            if [ "${autres:-0}" -gt 0 ]; then
+              echo "Une session tourne déjà (${autres}) : rien à lancer."
+              actif=false
+            fi
+          fi
           echo "Heure à Paris : ${h}h — plage ${SNIPER_HEURES} — actif=${actif}"
           echo "actif=${actif}" >> "$GITHUB_OUTPUT"
 
@@ -63,11 +84,16 @@ jobs:
     needs: plage
     if: needs.plage.outputs.actif == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 350       # la session s'arrête d'elle-même vers 5 h 20
+    concurrency:
+      group: ram-sniper        # jamais deux sessions en parallèle : la suivante attend
+      cancel-in-progress: false
     env:
       TZ: Europe/Paris
       SNIPER_HEURES: ${{ vars.SNIPER_HEURES || '7-23' }}
-      SNIPER_IGNORER_PLAGE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+      # Lancement manuel = test, même hors plage. Le relais automatique, lui,
+      # respecte la plage.
+      SNIPER_IGNORER_PLAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.relais == '' && '1' || '' }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -107,8 +133,9 @@ jobs:
       - name: Références de prix (idempotent)
         run: python ram_sniper.py --seed
 
-      - name: Scan
-        run: python ram_sniper.py --ci
+      - name: Session continue
+        id: session
+        run: python ram_sniper.py --continu
 
       - name: Sauvegarder la base et l'état réseau
         if: always()
@@ -120,10 +147,20 @@ jobs:
           key: soldier-db-${{ github.run_id }}-${{ github.run_attempt }}
 
       # GitHub désactive les workflows planifiés d'un dépôt sans activité
-      # depuis 60 jours. Réactiver le workflow à chaque passage remet le
+      # depuis 60 jours. Réactiver le workflow à chaque session remet le
       # compteur à zéro ; le résumé Telegram quotidien sert de contrôle.
       - name: Garder le planificateur actif
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow enable ram-sniper.yml --repo "${{ github.repository }}" || true
+
+      # Relais : la session s'est arrêtée à sa durée maximale, en pleine plage
+      # horaire → on lance la suivante tout de suite (elle reprend la base
+      # sauvegardée juste au-dessus). Si ce relais échoue, le chien de garde
+      # (cron) relance dans les 10 minutes.
+      - name: Relais vers la session suivante
+        if: steps.session.outputs.relais == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ram-sniper.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" -f relais=1

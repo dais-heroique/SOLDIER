@@ -2435,6 +2435,155 @@ def _():
         assert e.status == 403, e
     assert "/api/v2/catalog/items" not in appels, appels
 
+
+# ─── Mode continu : voie rapide, un fil par source, session avec relais ───
+class _ScraperFactice:
+    source = "vinted"
+    echecs_consecutifs = 0
+
+    def mots_cles(self):
+        return ["ddr4", "barrette ram", "kit ddr4", "trident z", "hyperx"]
+
+
+@test("tournée : les mots rapides reviennent à l'échéance, les autres tournent tous")
+def _():
+    import ram_sniper
+    t = [1000.0]
+    cfg = ram_config.Config({
+        "sources": {"vinted": {"mots_cles_rapides": ["ddr4", "barrette ram"],
+                               "rapide_toutes_les_s": [10, 10]}},
+        "composants": {"actif": True, "requetes_par_source": 2}})
+    tournee = ram_sniper.Tournee(_ScraperFactice(), horloge=lambda: t[0])
+    assert [tournee.suivante(cfg) for _ in range(2)] == [("ram", "ddr4"), ("ram", "barrette ram")]
+    lents = [tournee.suivante(cfg) for _ in range(5)]      # échéance pas atteinte : voie lente
+    assert sorted(lents, key=str) == sorted(
+        [("ram", "kit ddr4"), ("ram", "trident z"), ("ram", "hyperx"),
+         ("composant", None), ("composant", None)], key=str), lents
+    t[0] += 11                                             # échéance passée : rapide d'abord
+    assert tournee.suivante(cfg) == ("ram", "ddr4")
+    assert tournee.suivante(cfg) == ("ram", "barrette ram")
+    assert tournee.suivante(cfg)[1] not in ("ddr4", "barrette ram"), "puis la voie lente reprend"
+    # Sans réglage : le premier mot-clé de la source sert de voie rapide.
+    assert ram_sniper.mots_rapides(_ScraperFactice(), ram_config.Config({})) == ["ddr4"]
+
+
+@test("scan continu : la notification est mise en file AVANT la fin du lot, et le blocage met en pause")
+def _():
+    import ram_sniper
+    ordre = []
+
+    class _S(_ScraperFactice):
+        def __init__(self):
+            self.echecs_consecutifs = 0
+            self.appels = 0
+
+        def scanner_mot_cle(self, mot, sur_resultat=None):
+            self.appels += 1
+            if self.appels > 1:
+                self.echecs_consecutifs += 1               # ensuite : bloqué
+                return []
+            lot = [{"nouvelle": True, "id": i} for i in (1, 2)]
+            for r in lot:
+                sur_resultat(r)
+                ordre.append(("évaluée", r["id"]))
+            ordre.append("fin du lot")
+            return lot
+
+    origs = (ram_sniper.traiter_resultats, ram_sniper._attendre_scan,
+             ram_sniper.alerter_sorties, ram_config.get)
+    pauses = []
+    cfg = ram_config.Config({"sources": {"vinted": {"disjoncteur_echecs": 2,
+                                                     "delai_entre_requetes_s": [0, 0]}},
+                             "composants": {"actif": False}})
+    ram_sniper.traiter_resultats = lambda rs, c: ordre.append(("file", rs[0]["id"]))
+    ram_sniper.alerter_sorties = lambda c, sources: ordre.append(("bilan", tuple(sources)))
+
+    def attendre(secondes):
+        pauses.append(secondes)
+        if secondes >= 60:
+            ram_sniper.ARRET_SCAN.set()                    # fin du test à la 1re pause de blocage
+    ram_sniper._attendre_scan = attendre
+    ram_config.get = lambda force=False: cfg
+    ram_sniper.ARRET.clear(); ram_sniper.ARRET_SCAN.clear()
+    s = _S()
+    try:
+        with _Env():
+            ram_sniper.worker_source(s, cfg)
+    finally:
+        (ram_sniper.traiter_resultats, ram_sniper._attendre_scan,
+         ram_sniper.alerter_sorties, ram_config.get) = origs
+        ram_sniper.ARRET_SCAN.clear()
+    assert ordre[:5] == [("file", 1), ("évaluée", 1), ("file", 2), ("évaluée", 2), "fin du lot"], ordre
+    assert s.appels == 3, "2 échecs d'affilée = disjoncteur"
+    assert pauses[-1] == 60 and ("bilan", ("vinted",)) in ordre, (pauses, ordre)
+    assert s.echecs_consecutifs == 0, "compteur remis à zéro pour la reprise"
+
+
+@test("--continu de bout en bout : affaire notifiée, relais demandé à la durée, rien hors plage")
+def _():
+    import ram_sniper
+    vendeur_avis.vider_cache()
+    orig, orig_get, orig_pause = ram_scrapers.VintedClient, ram_config.get, ram_scrapers._pause
+    orig_req, orig_pause_v = comp.requetes_du_passage, vendeur_avis.PAUSE_S
+    orig_dans = ram_sniper.dans_plage_horaire
+
+    class _Client(_VintedBoutEnBout):
+        def search(self, search_text=None, max_retries=2, **kw):
+            return [dict(r, id=r["id"] + 100, url=r["url"].replace("e2e", "continu"))
+                    for r in super().search(search_text, max_retries)]
+
+    ram_scrapers.VintedClient = _Client
+    ram_scrapers._pause = lambda *a, **k: None
+    vendeur_avis.PAUSE_S = (0, 0)
+    comp.requetes_du_passage = lambda *a, **k: ["Ryzen 5 5600X"]
+    cfg = ram_config.Config({
+        "sources": {"vinted": {"actif": True, "mots_cles": ["ddr4"],
+                               "delai_entre_requetes_s": [0.05, 0.05]},
+                    "leboncoin": {"actif": False}},
+        "composants": {"categories": ["CPU"], "pause_notif_s": 0, "requetes_par_source": 1},
+        "ci": {"budget_notifications_s": 4}, "vision": {"actif": False},
+        "alertes": {"signe_de_vie_h": 0},
+        "calibrage": {"actif": False, "heure_job": "99:99"}})
+    ram_config.get = lambda force=False: cfg
+    sortie_gh = os.path.join(_TMP, "github_output_continu.txt")
+    try:
+        with _Env(SNIPER_HEURES="0-24", SNIPER_IGNORER_PLAGE=None, GITHUB_OUTPUT=sortie_gh):
+            assert ram_sniper.executer_continu(cfg, duree_s=1.5, pas_s=0.1) == 0
+            assert open(sortie_gh).read().strip().splitlines()[-1] == "relais=true"
+            assert not ram_sniper.ARRET_SCAN.is_set() or ram_sniper.ARRET.is_set()
+            # Hors plage, sans lancement manuel : rien ne démarre, pas de relais.
+            ram_sniper.dans_plage_horaire = lambda *a, **k: False
+            ram_scrapers.VintedClient = None               # tout appel réseau planterait
+            assert ram_sniper.executer_continu(cfg, duree_s=1.5, pas_s=0.1) == 0
+            assert open(sortie_gh).read().strip().splitlines()[-1] == "relais=false"
+    finally:
+        (ram_scrapers.VintedClient, ram_config.get, ram_scrapers._pause) = orig, orig_get, orig_pause
+        comp.requetes_du_passage, vendeur_avis.PAUSE_S = orig_req, orig_pause_v
+        ram_sniper.dans_plage_horaire = orig_dans
+        ram_sniper.ARRET.clear(); ram_sniper.ARRET_SCAN.clear()
+    bon, arnaque_ = comp._ligne("https://vinted.fr/continu/501"), comp._ligne("https://vinted.fr/continu/502")
+    assert bon and bon["statut"] == "notifiee", bon
+    assert arnaque_ and arnaque_["statut"] == "rejetee", arnaque_
+
+
+@test("workflow : session continue, une seule à la fois, chien de garde et relais")
+def _():
+    import yaml
+    wf = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          ".github", "workflows", "ram-sniper.yml"), encoding="utf-8"))
+    scan = wf["jobs"]["scan"]
+    assert scan["concurrency"] == {"group": "ram-sniper", "cancel-in-progress": False}
+    assert 330 <= scan["timeout-minutes"] <= 355, "sous la limite GitHub de 6 h"
+    assert float(ram_config.get().val("ci.duree_session_min")) * 60 < scan["timeout-minutes"] * 60 - 900
+    etapes = [e.get("name") for e in scan["steps"]]
+    assert etapes.index("Session continue") < etapes.index("Sauvegarder la base et l'état réseau") \
+        < etapes.index("Relais vers la session suivante")
+    session = next(e for e in scan["steps"] if e.get("name") == "Session continue")
+    assert session["id"] == "session" and "--continu" in session["run"]
+    assert "status != " in wf["jobs"]["plage"]["steps"][0]["run"], "le cron ne double pas une session"
+    cfg = ram_config.get()
+    assert cfg.val("sources.vinted.mots_cles_rapides") and cfg.val("sources.leboncoin.mots_cles_rapides")
+
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]
