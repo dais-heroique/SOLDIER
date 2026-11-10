@@ -34,6 +34,11 @@ def tester_vinted(sortie):
     except VintedError as e:
         motif = "bloqué par Datadome" if e.status in (401, 403) else reseau.masquer(e)
         print(f"    ❌ recherche : {motif}")
+        corps = getattr(e, "body", None)
+        if corps and e.status not in (401, 403):
+            import re as _re
+            titre = _re.search(r"<title>(.*?)</title>", corps, _re.S | _re.I)
+            print(f"       réponse : {reseau.masquer((titre.group(1) if titre else corps))[:100].strip()}")
         return False
     except Exception as e:
         print(f"    ❌ recherche : {type(e).__name__}: {reseau.masquer(e)[:120]}")

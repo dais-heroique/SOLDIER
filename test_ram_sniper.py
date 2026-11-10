@@ -2324,6 +2324,117 @@ def _():
     assert cfg.val("arnaque.seuil_rejet") == 60 and cfg.val("arnaque.seuil_alerte") == 30
     assert int(cfg.val("composants.requetes_par_source")) <= 8, "volume de requêtes borné"
 
+
+# ─── Vinted : page de recherche (l'API /api/v2/catalog/items renvoie 404) ───
+def _page_vinted(items):
+    """Imite la page /catalog : JSON embarqué dans self.__next_f.push([1,"..."])
+    (échappé comme Next.js le fait), avec du bruit avant et après."""
+    import json as _json
+    flux = ('{"catalog":{"uiState":"SUCCESS"},"items":{"items":' + _json.dumps(items)
+            + ',"pagination":{"current_page":1,"total_entries":%d}}}' % len(items))
+    coupe = len(flux) // 2   # le flux est livré en plusieurs morceaux
+    pushes = "".join('<script>self.__next_f.push([1,%s])</script>' % _json.dumps(m)
+                     for m in (flux[:coupe], flux[coupe:]))
+    return "<html><body><script>self.__next_f.push([0])</script>" + pushes + "</body></html>"
+
+
+_ANNONCES_VINTED = [  # extraits de vraies annonces (novembre 2026)
+    {"id": 10749346611, "productItem": {
+        "id": 10749346611, "title": "DDR4-2666 2x4GB",
+        "url": "/items/10749346611-ddr4-2666-2x4gb",
+        "price": {"amount": "20.00", "currencyCode": "EUR"},
+        "serviceFee": {"amount": "1.70", "currencyCode": "EUR"},
+        "totalItemPrice": {"amount": "21.70", "currencyCode": "EUR"},
+        "user": {"id": 58478467, "isBusiness": False, "photo": None},
+        "photos": [{"url": "https://images1.vinted.net/a/f800/x.webp?s=1", "isMain": True, "imageNo": 1},
+                   {"url": "https://images1.vinted.net/b/f800/y.webp?s=2", "isMain": False, "imageNo": 2}],
+        "itemBox": {"firstLine": "Kingston", "secondLine": "Très bon état"}}},
+    {"id": 10749317237, "productItem": {
+        "id": 10749317237, "title": "RAM Samsung DDR4 4GB \"3200\"MHz",
+        "url": "/items/10749317237-ram-samsung-ddr4-4gb-3200mhz",
+        "price": {"amount": "17.30", "currencyCode": "EUR"},
+        "totalItemPrice": {"amount": "18.87", "currencyCode": "EUR"},
+        "user": {"id": 113022532}, "photos": [],
+        "itemBox": {"firstLine": "Samsung", "secondLine": "Très bon état"}}},
+]
+
+
+@test("Vinted : la page de recherche est lue (JSON embarqué, morceaux, guillemets)")
+def _():
+    import vinted_client
+    items = vinted_client.extraire_items_catalogue(_page_vinted(_ANNONCES_VINTED))
+    assert [i["id"] for i in items] == [10749346611, 10749317237], items
+    assert items[1]["productItem"]["title"] == 'RAM Samsung DDR4 4GB "3200"MHz'
+    assert vinted_client.extraire_items_catalogue(_page_vinted([])) == [], "0 résultat ≠ page inconnue"
+    assert vinted_client.extraire_items_catalogue("<html>Access denied</html>") is None
+    assert vinted_client.extraire_items_catalogue("") is None
+
+
+@test("Vinted : annonce normalisée (URL absolue, prix hors frais, photos, vendeur)")
+def _():
+    import vinted_client
+    vc = vinted_client.VintedClient.__new__(vinted_client.VintedClient)
+    vc.host, vc.currency = "https://www.vinted.fr", "EUR"
+    a = vc._normalize_catalogue(_ANNONCES_VINTED[0])
+    assert a["url"] == "https://www.vinted.fr/items/10749346611-ddr4-2666-2x4gb", a["url"]
+    assert a["price"] == 20, "prix de l'annonce, sans les 1,70 € de protection (ajoutés par le scoring)"
+    assert a["vendeur_id"] == 58478467 and a["subject"] == "DDR4-2666 2x4GB"
+    assert a["image"].endswith("x.webp?s=1") and len(a["photos"]) == 2
+    assert a["description"] == "Kingston, Très bon état" and a["source"] == "vinted"
+    b = vc._normalize_catalogue(_ANNONCES_VINTED[1])
+    assert b["price"] == 17 and b["photos"] == [] and b["image"] == ""
+
+
+@test("Vinted : search() passe par /catalog, borne max_items, et retombe sur l'API si besoin")
+def _():
+    import vinted_client
+    appels = []
+
+    class _Rep:
+        def __init__(self, code, texte="", data=None):
+            self.status_code, self.text, self._d, self.cookies = code, texte, data, {}
+        def json(self):
+            return self._d
+
+    class _Session:
+        def __init__(self, routes): self.routes = routes
+        def get(self, url, **kw):
+            appels.append(url.split("vinted.fr")[-1])
+            return self.routes[url.split("vinted.fr")[-1]]()
+
+    def client(routes):
+        vc = vinted_client.VintedClient.__new__(vinted_client.VintedClient)
+        vc.host, vc.domain, vc.currency, vc.verbose = "https://www.vinted.fr", "vinted.fr", "EUR", False
+        vc.items_api = vc.host + "/api/v2/catalog/items"
+        vc._cookie_ok, vc._cookie_ts, vc._impersonate = True, time.time(), None
+        vc.session = _Session(routes)
+        vc._ensure_session = lambda force=False: None   # pas de réseau dans les tests
+        return vc
+
+    page = _page_vinted(_ANNONCES_VINTED)
+    vc = client({"/catalog": lambda: _Rep(200, page)})
+    res = vc.search(search_text="ddr4", price_to=40, max_items=1)
+    assert [r["id"] for r in res] == [10749346611] and appels == ["/catalog"], (res, appels)
+    assert vc.search(search_text="ddr4")[1]["id"] == 10749317237
+
+    appels.clear()   # page non reconnue -> ancienne API
+    vc = client({"/catalog": lambda: _Rep(200, "<html>refonte</html>"),
+                 "/api/v2/catalog/items": lambda: _Rep(200, data={"items": [
+                     {"id": 7, "title": "DDR4 8Go", "url": "https://www.vinted.fr/items/7",
+                      "price": {"amount": "12.0"}, "user": {"id": 3}}]})})
+    res = vc.search(search_text="ddr4")
+    assert res[0]["id"] == 7 and appels == ["/catalog", "/api/v2/catalog/items"], appels
+
+    appels.clear()   # blocage Datadome : pas de repli (l'API serait bloquée aussi)
+    vinted_client.time.sleep = lambda *_: None
+    vc = client({"/catalog": lambda: _Rep(403, "blocked")})
+    try:
+        vc.search(search_text="ddr4", max_retries=2)
+        assert False, "403 doit lever VintedError"
+    except vinted_client.VintedError as e:
+        assert e.status == 403, e
+    assert "/api/v2/catalog/items" not in appels, appels
+
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]
