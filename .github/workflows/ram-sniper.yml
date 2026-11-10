@@ -12,11 +12,16 @@ name: RAM Sniper (scan planifié)
 #   GEMINI_API_KEY                         facultatif : analyse des photos
 #   TS_AUTHKEY, TS_EXIT_NODE               facultatif : sortie maison (gratuit)
 #   SNIPER_PROXY_URLS                      facultatif : proxys payants
-# Variable (onglet Variables) : SNIPER_WARP = auto (défaut) | toujours | jamais
+# Variables (onglet Variables) :
+#   SNIPER_WARP    auto (défaut) | toujours | jamais
+#   SNIPER_HEURES  plage horaire, heure de Paris, fin exclue (défaut 7-23 ;
+#                  « 0-24 » = tout le temps). Un lancement manuel l'ignore.
 
 on:
   schedule:
-    - cron: "*/10 * * * *"     # GitHub peut retarder ou sauter des passages (README §10)
+    # Cron en UTC, volontairement large (couvre 7h-23h Paris été comme hiver) ;
+    # la plage exacte est vérifiée à chaque passage (job « plage »).
+    - cron: "*/10 5-21 * * *"  # GitHub peut retarder ou sauter des passages (README §10)
   workflow_dispatch:
 
 concurrency:
@@ -28,11 +33,41 @@ permissions:
   actions: write               # pour garder le planificateur actif (dernière étape)
 
 jobs:
+  # Décide, en quelques secondes et sans rien installer, si l'heure (Paris)
+  # est dans la plage : sinon le job « scan » n'est même pas démarré.
+  plage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      actif: ${{ steps.heure.outputs.actif }}
+    steps:
+      - id: heure
+        env:
+          EVENEMENT: ${{ github.event_name }}
+          SNIPER_HEURES: ${{ vars.SNIPER_HEURES || '7-23' }}
+        run: |
+          h="$(TZ=Europe/Paris date +%-H)"
+          debut="${SNIPER_HEURES%-*}"; fin="${SNIPER_HEURES#*-}"
+          actif=false
+          if [ "$EVENEMENT" = "workflow_dispatch" ] || [ "$debut" = "$fin" ]; then
+            actif=true
+          elif [ "$debut" -lt "$fin" ]; then
+            if [ "$h" -ge "$debut" ] && [ "$h" -lt "$fin" ]; then actif=true; fi
+          else
+            if [ "$h" -ge "$debut" ] || [ "$h" -lt "$fin" ]; then actif=true; fi
+          fi
+          echo "Heure à Paris : ${h}h — plage ${SNIPER_HEURES} — actif=${actif}"
+          echo "actif=${actif}" >> "$GITHUB_OUTPUT"
+
   scan:
+    needs: plage
+    if: needs.plage.outputs.actif == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       TZ: Europe/Paris
+      SNIPER_HEURES: ${{ vars.SNIPER_HEURES || '7-23' }}
+      SNIPER_IGNORER_PLAGE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

@@ -14,6 +14,7 @@ d'acquisition (surestimer la marge), et le double comptage des multiplicateurs
 import os
 import sys
 import tempfile
+import time
 import traceback
 
 # Base temporaire AVANT tout import du module (ram_db lit DB_FILE à l'import).
@@ -1909,6 +1910,419 @@ def _():
     assert cands and cands[0] == "chrome124", cands
     assert len(cands) == len(set(cands))
 
+
+
+# ═══════════════════════════════════════════════════════════
+section("Plage horaire, arnaques, composants")
+
+
+def _utc(y, mo, d, h, mi=0):
+    from datetime import datetime, timezone
+    return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+
+
+@test("plage horaire : 7h-23h à l'heure de Paris, été comme hiver")
+def _():
+    import ram_sniper
+    cfg = ram_config.Config({"ci": {"heures_actives": [7, 23], "fuseau": "Europe/Paris"}})
+    ok = lambda dt: ram_sniper.dans_plage_horaire(cfg, dt)
+    with _Env(SNIPER_HEURES=None, SNIPER_IGNORER_PLAGE=None):
+        assert not ok(_utc(2026, 12, 1, 5, 30)), "06:30 à Paris (hiver) : trop tôt"
+        assert ok(_utc(2026, 12, 1, 6, 0)), "07:00 à Paris (hiver)"
+        assert ok(_utc(2026, 12, 1, 21, 59)), "22:59 à Paris (hiver)"
+        assert not ok(_utc(2026, 12, 1, 22, 0)), "23:00 : fin exclue"
+        assert ok(_utc(2026, 7, 1, 5, 0)), "07:00 à Paris (été, UTC+2)"
+        assert not ok(_utc(2026, 7, 1, 4, 59)), "06:59 à Paris (été)"
+        assert not ok(_utc(2026, 7, 1, 21, 0)), "23:00 à Paris (été)"
+
+
+@test("plage horaire : SNIPER_HEURES prend le pas, « 0-24 » = toujours, plage qui passe minuit")
+def _():
+    import ram_sniper
+    cfg = ram_config.Config({"ci": {"heures_actives": [7, 23]}})
+    midi, tard, nuit = _utc(2026, 12, 1, 11), _utc(2026, 12, 1, 22, 30), _utc(2026, 12, 1, 2)
+    with _Env(SNIPER_HEURES="9-18"):
+        assert ram_sniper.dans_plage_horaire(cfg, midi)
+        assert not ram_sniper.dans_plage_horaire(cfg, tard)
+    with _Env(SNIPER_HEURES="0-24"):
+        assert ram_sniper.dans_plage_horaire(cfg, nuit)
+    with _Env(SNIPER_HEURES="22-6"):
+        assert ram_sniper.dans_plage_horaire(cfg, tard) and ram_sniper.dans_plage_horaire(cfg, nuit)
+        assert not ram_sniper.dans_plage_horaire(cfg, midi)
+    with _Env(SNIPER_HEURES="n'importe quoi"):
+        assert ram_sniper.dans_plage_horaire(cfg, nuit), "valeur illisible : jamais bloquer"
+    with _Env(SNIPER_HEURES="9-18", SNIPER_IGNORER_PLAGE="1"):
+        assert ram_sniper.dans_plage_horaire(cfg, nuit), "lancement manuel : toujours"
+    with _Env(SNIPER_HEURES=None, SNIPER_IGNORER_PLAGE=None):
+        assert ram_sniper.dans_plage_horaire(ram_config.Config({}), nuit), "pas de plage = 24 h/24"
+
+
+@test("hors plage : le passage est ignoré sans toucher la base ni le réseau")
+def _():
+    import ram_sniper
+    cfg = ram_config.Config({"ci": {"heures_actives": [7, 23]}})
+    orig_plage, orig_init = ram_sniper.dans_plage_horaire, ram_db.init_db
+
+    def _interdit():
+        raise AssertionError("la base ne doit pas être ouverte hors plage")
+    ram_sniper.dans_plage_horaire = lambda c=None, m=None: False
+    ram_db.init_db = _interdit
+    try:
+        assert ram_sniper.executer_ci(cfg) == 0
+    finally:
+        ram_sniper.dans_plage_horaire, ram_db.init_db = orig_plage, orig_init
+
+
+@test("workflow : le job « plage » décide, avec la même logique que le code (vrai bash, fausse horloge)")
+def _():
+    import subprocess
+    import yaml
+    wf = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          ".github", "workflows", "ram-sniper.yml"),
+                             encoding="utf-8"))
+    assert wf["jobs"]["scan"]["needs"] == "plage"
+    assert "needs.plage.outputs.actif" in wf["jobs"]["scan"]["if"]
+    heures_cron = wf[True]["schedule"][0]["cron"].split()[1]
+    assert heures_cron == "5-21", "le cron en UTC doit couvrir 7h-23h Paris, été et hiver"
+    script = wf["jobs"]["plage"]["steps"][0]["run"]
+    boite = tempfile.mkdtemp(prefix="fausse_horloge_")
+
+    def actif(heure, plage, evenement="schedule"):
+        d = os.path.join(boite, f"h{heure}")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "date"), "w") as f:
+            f.write(f"#!/bin/sh\necho {heure}\n")
+        os.chmod(os.path.join(d, "date"), 0o755)
+        sortie = os.path.join(boite, f"out_{heure}_{plage}_{evenement}")
+        subprocess.run(["bash", "-c", script], check=True, capture_output=True, env={
+            "PATH": d + ":" + os.environ["PATH"], "EVENEMENT": evenement,
+            "SNIPER_HEURES": plage, "GITHUB_OUTPUT": sortie})
+        return open(sortie).read().strip() == "actif=true"
+
+    assert [actif(h, "7-23") for h in (6, 7, 12, 22, 23, 0)] == [False, True, True, True, False, False]
+    assert actif(3, "0-24") and actif(12, "9-18") and not actif(19, "9-18")
+    assert actif(23, "22-6") and actif(3, "22-6") and not actif(12, "22-6")
+    assert actif(3, "7-23", "workflow_dispatch"), "un lancement manuel ignore la plage"
+
+
+@test("arnaque : « neuf » à vil prix + WhatsApp + urgence = rejet ; annonce honnête = rien")
+def _():
+    import arnaque
+    a = arnaque.evaluer("RTX 4090 neuve", "jamais ouverte, urgent, contactez moi sur whatsapp", 400, 1500)
+    assert a["rejeter"] and a["niveau"] == "eleve" and a["score"] == 100, a
+    b = arnaque.evaluer("RTX 3060 Ti", "Utilisée 2 ans, changement de config, facture dispo", 190, 230)
+    assert b["niveau"] == "faible" and not b["rejeter"] and arnaque.drapeau(b) is None, b
+    c = arnaque.evaluer("Ryzen 7 5800X", "Appelez moi au 06 12 34 56 78, virement uniquement", 100, 190)
+    assert c["rejeter"] and "paiement hors plateforme" in c["raisons"], c
+    d = arnaque.evaluer("Ryzen 7 5800X", "Processeur en bon état, vendu avec sa boîte d'origine et sa facture.", 70, 190)
+    assert d["niveau"] == "moyen" and not d["rejeter"], "le prix seul alerte, il ne rejette pas"
+    assert "37 %" in arnaque.drapeau(d) or "37%" in arnaque.drapeau(d), arnaque.drapeau(d)
+    e = arnaque.evaluer("Carte graphique", "écran noir : pas de signal vidéo", 50, None)
+    assert e["niveau"] == "faible", "« signal » seul n'est pas un contact hors plateforme"
+
+
+@test("arnaque : un code SMS demandé ou un e-mail dans l'annonce sont des signaux forts")
+def _():
+    import arnaque
+    assert arnaque.evaluer("GPU", "envoyez le code de verification recu par sms", 100, 150)["rejeter"]
+    assert arnaque.evaluer("GPU", "ecrivez moi a jean.dupont@gmail.com", 100, 150)["niveau"] != "faible"
+    assert arnaque.evaluer("GPU", "paiement par bitcoin accepté", 100, 150)["niveau"] != "faible"
+
+
+@test("RAM : un kit « neuf » bradé avec WhatsApp est rejeté pour arnaque, jamais notifié")
+def _():
+    brut = {"url": "https://vinted.fr/arnaque/ram1",
+            "titre": "Kit DDR4 32Go Corsair Vengeance LPX 3200",
+            "description": "CMK32GX4M2E3200C16 2x16Go neuf jamais ouvert urgent contactez moi sur whatsapp",
+            "prix": 9.0, "photos": ["https://x/a.jpg"]}
+    r = ram_scrapers.traiter_annonce(brut, "vinted", "ddr4 32go")
+    assert r["pre"]["exclusion"] == "arnaque" and not r["notifiable"], r["pre"]
+    assert ram_db.get_annonce(r["annonce"]["id"])["statut"] == "rejete"
+
+
+@test("RAM : un risque modéré n'écarte pas l'annonce mais ajoute un drapeau ⚠️ en tête")
+def _():
+    brut = {"url": "https://vinted.fr/arnaque/ram2",
+            "titre": "Kit DDR4 32Go Corsair Vengeance LPX 3200",
+            "description": "CMK32GX4M2E3200C16 2x16Go testé, raison familiale, livraison uniquement",
+            "prix": 62.0, "photos": ["https://x/a.jpg"]}
+    r = ram_scrapers.traiter_annonce(brut, "vinted", "ddr4 32go")
+    assert not r["pre"]["exclusion"], r["pre"].get("rejet_motif")
+    assert "arnaque" in r["pre"]["drapeaux"][0] and r["pre"]["drapeaux"][0].startswith("⚠️")
+
+
+import ram_composants as comp                                     # noqa: E402
+_CAT = comp.catalogue(["CPU", "GPU", "MOBO"], 25)
+
+
+@test("identification : le modèle exact, jamais un voisin (« 9600 » ≠ i5-9600K)")
+def _():
+    nom = lambda t: (comp.identifier(t, _CAT).nom if comp.identifier(t, _CAT) else None)
+    assert nom("Ryzen 5 5600X 100€") == "Ryzen 5 5600X"
+    assert nom("Ryzen 5 5600 AM4") == "Ryzen 5 5600", "5600 ne doit pas devenir 5600X"
+    assert nom("i5-9600K") == "i5-9600K", "pas un Ryzen 5 9600"
+    assert nom("Ryzen 5 9600 AM5") == "Ryzen 5 9600"
+    assert nom("RTX3060Ti Gigabyte") == "RTX 3060 Ti" == nom("rtx 3060 ti")
+    assert nom("RTX 3060 12go") == "RTX 3060 12GB"
+    assert nom("i5 12400f") == "i5-12400F" == nom("i5-12400F neuf")
+    assert nom("i7 14700KF") == "i7-14700KF", "KF et K sont deux produits"
+    assert nom("Carte mère MSI B550M Pro") == "B550 (AM4)"
+    assert nom("9700K") == "i7-9700K"
+    assert nom("Ryzen 7 5800X3D") == "Ryzen 7 5800X3D"
+
+
+@test("identification : titre ambigu ou sans modèle → on s'abstient")
+def _():
+    for t in ("Ryzen 5 5600X + RTX 3060", "RTX 3070 ou RTX 3060 Ti", "i5-12400F ou i5-12400",
+              "Vend mon PC", "carte graphique gaming 8go", "9600"):
+        assert comp.identifier(t, _CAT) is None, t
+
+
+@test("catalogue : market_db + estimations de market_extra (marquées, seuils plus stricts)")
+def _():
+    import market_db
+    estimes = [m for m in _CAT if m.estime]
+    assert len(_CAT) > 250 and 40 < len(estimes) < len(_CAT)
+    m = next(x for x in estimes if x.nom == "i5-12400")
+    assert abs(m.good / m.fair - 0.80) < 0.01 and abs(m.steal / m.fair - 0.65) < 0.01
+    noms = {x.nom for x in _CAT}
+    assert {k for k, v in market_db.CPU.items() if v["fair"] >= 25} <= noms, \
+        "tout market_db (≥ 25 €) doit être là"
+    assert all(x.fair >= 25 for x in _CAT), "les modèles sous 25 € sont écartés"
+
+
+@test("prix de référence : la grille est corrigée par le marché observé, sans dériver")
+def _():
+    cfg = ram_config.Config({"composants": {}})
+    m = comp.Modele("CPU", "X 1000", 100, 83, 68, ["x 1000"])
+    e = comp.Modele("CPU", "X 1000", 100, 80, 65, ["x 1000"], estime=True)
+    assert comp.prix_reference(m, cfg, observes=[150] * 5)[0] == 100, "moins de 8 annonces : grille"
+    assert abs(comp.prix_reference(m, cfg, observes=[150] * 20)[0] - 117.5) < 0.01, \
+        "150 × 0,93 plafonné à +35 % = 135, mélangé à 50 %"
+    assert abs(comp.prix_reference(e, cfg, observes=[150] * 20)[0] - 124.5) < 0.01, \
+        "une estimation se corrige plus vite (70 %)"
+    assert abs(comp.prix_reference(m, cfg, observes=[60] * 10)[0] - 82.5) < 0.01, \
+        "le marché peut aussi baisser (plancher −35 %)"
+    assert comp.prix_reference(m, cfg, observes=[5] * 20)[0] == 100, "annonces farfelues ignorées"
+
+
+def _brut_c(n, titre, prix, **plus):
+    return dict({"url": f"https://vinted.fr/composant/{n}", "titre": titre, "prix": prix,
+                 "description": "Processeur utilisé un an, très bon état, facture disponible",
+                 "photos": ["https://x/a.jpg"], "vendeur_id": 9000 + n}, **plus)
+
+
+@test("composants : une affaire est repérée, vérifiée, enregistrée, et jamais retraitée")
+def _():
+    cfg = ram_config.Config({})
+    appels = []
+    verif = lambda b: appels.append(b["url"]) or {"ok": True, "avis": 12}
+    r = comp.evaluer_annonce(_brut_c(1, "Ryzen 5 5600X", 70), "vinted", verif=verif)
+    assert r["statut"] == "a_notifier" and r["niveau"] == "bonne", r
+    assert r["marge"] > 15 and r["prix_total"] > 70, "frais Vinted ajoutés"
+    assert comp._ligne(r["url"])["vendeur_avis"] == 12
+    assert comp.evaluer_annonce(_brut_c(1, "Ryzen 5 5600X", 70), "vinted", verif=verif)["statut"] == "deja_vue"
+    assert len(appels) == 1, "un seul profil vendeur demandé"
+
+
+@test("composants : pas d'affaire = aucune requête de profil ; vendeur à 0 avis = rejet")
+def _():
+    appels = []
+    verif = lambda b: appels.append(1) or {"ok": True, "avis": 12}
+    r = comp.evaluer_annonce(_brut_c(2, "Ryzen 5 5600X", 95), "vinted", verif=verif)
+    assert r["statut"] == "vue" and not appels
+    r = comp.evaluer_annonce(_brut_c(3, "Ryzen 5 5600X", 70), "vinted",
+                             verif=lambda b: {"ok": False, "avis": 0, "motif": "vendeur sans avis"})
+    assert r["statut"] == "rejetee" and "avis" in r["motif"]
+
+
+@test("composants : profil illisible (403) → annonce oubliée et retentée, pas rejetée à vie")
+def _():
+    r = comp.evaluer_annonce(_brut_c(4, "Ryzen 5 5600X", 70), "vinted",
+                             verif=lambda b: {"ok": False, "transitoire": True, "motif": "HTTP 403"})
+    assert r["statut"] == "transitoire" and comp._ligne(r["url"]) is None
+    r = comp.evaluer_annonce(_brut_c(4, "Ryzen 5 5600X", 70), "vinted",
+                             verif=lambda b: {"ok": True, "avis": 5})
+    assert r["statut"] == "a_notifier"
+
+
+@test("composants : à 35 % du marché, un vendeur à 3 avis est rejeté, un vendeur à 45 avis est signalé ⚠️")
+def _():
+    r = comp.evaluer_annonce(_brut_c(5, "Ryzen 5 5600X", 35), "vinted",
+                             verif=lambda b: {"ok": True, "avis": 3})
+    assert r["statut"] == "rejetee" and "trop beau" in r["motif"], r
+    r = comp.evaluer_annonce(_brut_c(6, "Ryzen 5 5600X", 35), "vinted",
+                             verif=lambda b: {"ok": True, "avis": 45})
+    assert r["statut"] == "a_notifier" and r["niveau"] == "affaire", r
+    assert "arnaque" in r["motif"], "le doute doit être écrit dans la notification"
+
+
+@test("composants : boîte vide, HS, PC complet, portable, lot ambigu → pas de fausse alerte")
+def _():
+    verif = lambda b: {"ok": True, "avis": 50}
+    for n, titre, prix in ((7, "Boite vide carte graphique RTX 3060", 40),
+                           (8, "RTX 3060 HS pour pièces", 40),
+                           (9, "PC complet Ryzen 5 5600X", 70),
+                           (10, "Asus portable RTX 3060 gaming", 150)):
+        r = comp.evaluer_annonce(_brut_c(n, titre, prix), "vinted", verif=verif)
+        assert r and r["statut"] == "rejetee", (titre, r)
+    assert comp.evaluer_annonce(_brut_c(11, "PC gamer Ryzen 5 5600X RTX 3060", 300), "vinted",
+                                verif=verif) is None
+    r = comp.evaluer_annonce(_brut_c(12, "RTX 3060", 12), "vinted", verif=verif)
+    assert r["statut"] == "rejetee" and "plancher" in r["motif"]
+
+
+@test("composants : annonce WhatsApp / acompte → rejet pour arnaque")
+def _():
+    r = comp.evaluer_annonce(
+        _brut_c(13, "Ryzen 5 5600X", 60, description="urgent, contactez moi par whatsapp"),
+        "vinted", verif=lambda b: {"ok": True, "avis": 50})
+    assert r["statut"] == "rejetee" and "arnaque" in r["motif"]
+
+
+class _FauxScraper:
+    source = "vinted"
+
+    def __init__(self, resultats):
+        self.resultats, self.requetes = resultats, []
+        self.echecs_consecutifs, self._nb_bruts = 0, 0
+
+    def rechercher(self, mot):
+        self.requetes.append(mot)
+        bruts = self.resultats.get(mot)
+        self._nb_bruts = len(bruts or [])
+        return bruts
+
+    def _verif_vendeur(self, brut):
+        return {"ok": True, "avis": 20}
+
+
+@test("composants : scan d'une source, notification plafonnée, expiration des vieilles affaires")
+def _():
+    import ram_scrapers
+    cfg = ram_config.Config({"composants": {"requetes_par_source": 1, "max_notifs_par_passage": 2,
+                                            "pause_notif_s": 0},
+                             "sources": {"vinted": {"delai_entre_requetes_s": [0, 0]}}})
+    with ram_db.get_db() as conn:     # affaires laissées en attente par les tests précédents
+        conn.execute("UPDATE ram_composant SET statut='notifiee' WHERE statut='a_notifier'")
+    modele = [comp.Modele("CPU", "Ryzen 5 5600X", 100, 83, 68, ["Ryzen 5 5600X"])]
+    faux = _FauxScraper({"Ryzen 5 5600X": [
+        _brut_c(20, "Ryzen 5 5600X", 70), _brut_c(21, "Ryzen 5 5600X", 72),
+        _brut_c(22, "Ryzen 5 5600X", 71), _brut_c(23, "Ryzen 5 5600X", 120)]})
+    orig = ram_scrapers._pause
+    ram_scrapers._pause = lambda *a, **k: None
+    try:
+        evals = comp.scanner_source(faux, cfg, limite=1, modeles=modele)
+    finally:
+        ram_scrapers._pause = orig
+    assert faux.requetes == ["Ryzen 5 5600X"], faux.requetes
+    assert sorted(e["statut"] for e in evals) == ["a_notifier"] * 3 + ["vue"], evals
+    stats = [s for s in ram_db.scan_stats() if s["mot_cle"] == "Ryzen 5 5600X"]
+    assert stats and stats[0]["requetes"] >= 1, ram_db.scan_stats()
+    n1, n2, n3 = comp.notifier(cfg), comp.notifier(cfg), comp.notifier(cfg)
+    assert (n1, n2, n3) == (2, 1, 0), (n1, n2, n3)
+    # (les annonces vues plus haut ont fait baisser le prix de référence : le
+    # marché apprend, 70 € n'est plus une affaire pour ce modèle dans ce test)
+    comp.evaluer_annonce(_brut_c(24, "Ryzen 5 5600X", 45), "vinted", verif=lambda b: {"ok": True, "avis": 9})
+    with ram_db.get_db() as conn:
+        conn.execute("UPDATE ram_composant SET vu_le=? WHERE url=?", (time.time() - 10 * 3600,
+                                                                      "https://vinted.fr/composant/24"))
+    assert comp.notifier(cfg) == 0, "une affaire vieille de 10 h est abandonnée"
+    assert comp._ligne("https://vinted.fr/composant/24")["statut"] == "expiree", \
+        comp._ligne("https://vinted.fr/composant/24")
+
+
+@test("composants : les recherches tournent (les plus en retard d'abord) et le disjoncteur coupe")
+def _():
+    cfg = ram_config.Config({"composants": {"requetes_par_source": 4}})
+    premieres = comp.requetes_du_passage("leboncoin", cfg, modeles=_CAT)
+    assert len(premieres) == len(set(premieres)) == 4
+    for mot in premieres:
+        ram_db.maj_scan_stat("leboncoin", mot, requetes=1)
+    suivantes = comp.requetes_du_passage("leboncoin", cfg, modeles=_CAT)
+    assert not set(premieres) & set(suivantes), "une recherche faite à l'instant passe après les autres"
+    import ram_scrapers
+    faux = _FauxScraper({})
+    faux.source = "leboncoin"
+    faux.echecs_consecutifs = 4
+    ram_scrapers_pause, ram_scrapers._pause = ram_scrapers._pause, lambda *a, **k: None
+    try:
+        comp.scanner_source(faux, ram_config.Config({"sources": {"leboncoin": {"disjoncteur_echecs": 4}}}),
+                            limite=3, modeles=_CAT)
+    finally:
+        ram_scrapers._pause = ram_scrapers_pause
+    assert faux.requetes == [], "source bloquée : aucune requête composants"
+
+
+@test("composants : message Telegram lisible et échappé ; rapport de prix complet")
+def _():
+    ligne = {"niveau": "affaire", "categorie": "GPU", "modele": "RTX 3060 <b>", "source": "vinted",
+             "prix_affiche": 100.0, "prix_total": 108.0, "reference": 200.0, "marge": 90.8,
+             "vendeur_avis": 33, "motif": None, "titre": "RTX 3060 <script>", "url": "https://vinted.fr/x"}
+    texte = comp.message(ligne, estime=True)
+    assert "AFFAIRE EN OR" in texte and "&lt;b&gt;" in texte and "&lt;script&gt;" in texte
+    assert "<script>" not in texte and "référence estimée" in texte and "https://vinted.fr/x" in texte
+    lignes = comp.rapport_prix(ram_config.Config({}), "CPU")
+    assert len(lignes) > 50 and all(x["reference"] > 0 for x in lignes)
+    assert any(x["estime"] for x in lignes) and any(x["observees"] > 0 for x in lignes
+                                                    if x["modele"] == "Ryzen 5 5600X")
+
+
+class _VintedBoutEnBout:
+    def __init__(self, **kw):
+        pass
+
+    def search(self, search_text=None, max_retries=2, **kw):
+        if search_text != "Ryzen 5 5600X":
+            return []
+        base = {"description": "Processeur utilisé un an, très bon état, facture disponible"}
+        return [dict(base, id=501, url="https://vinted.fr/e2e/501", subject="Ryzen 5 5600X",
+                     price=45.0, image="https://x/a.jpg", vendeur_id=71),
+                dict(base, id=502, url="https://vinted.fr/e2e/502", subject="Ryzen 5 5600X neuf",
+                     price=20.0, image="https://x/b.jpg", vendeur_id=72,
+                     description="jamais ouvert urgent contactez moi sur whatsapp")]
+
+    def get_user_feedback(self, vendeur_id):
+        return {"avis": 25, "note": 4.8, "pseudo": f"vendeur{vendeur_id}"}
+
+
+@test("mode --ci de bout en bout : l'affaire est notifiée, l'arnaque rejetée, les deux en base")
+def _():
+    import ram_sniper
+    vendeur_avis.vider_cache()
+    orig, orig_get, orig_pause = ram_scrapers.VintedClient, ram_config.get, ram_scrapers._pause
+    orig_req, orig_pause_v = comp.requetes_du_passage, vendeur_avis.PAUSE_S
+    ram_scrapers.VintedClient = _VintedBoutEnBout
+    ram_scrapers._pause = lambda *a, **k: None
+    vendeur_avis.PAUSE_S = (0, 0)
+    comp.requetes_du_passage = lambda *a, **k: ["Ryzen 5 5600X"]
+    cfg = ram_config.Config({
+        "sources": {"vinted": {"actif": True, "mots_cles": ["ddr4"]},
+                    "leboncoin": {"actif": False}},
+        "composants": {"categories": ["CPU"], "pause_notif_s": 0},
+        "ci": {"budget_notifications_s": 1}, "vision": {"actif": False},
+        "alertes": {"signe_de_vie_h": 0},
+        "calibrage": {"actif": False, "heure_job": "99:99"}})
+    ram_config.get = lambda force=False: cfg
+    try:
+        with _Env(SNIPER_HEURES=None, SNIPER_IGNORER_PLAGE="1"):
+            assert ram_sniper.executer_ci(cfg) == 0
+    finally:
+        (ram_scrapers.VintedClient, ram_config.get, ram_scrapers._pause) = orig, orig_get, orig_pause
+        comp.requetes_du_passage, vendeur_avis.PAUSE_S = orig_req, orig_pause_v
+    bon, arnaque_ = comp._ligne("https://vinted.fr/e2e/501"), comp._ligne("https://vinted.fr/e2e/502")
+    assert bon and bon["statut"] == "notifiee" and bon["vendeur_avis"] == 25, bon
+    assert arnaque_ and arnaque_["statut"] == "rejetee" and "arnaque" in arnaque_["motif"], arnaque_
+
+
+
+@test("config réelle : plage 7-23, composants CPU/GPU/MOBO, arnaque 60/30")
+def _():
+    cfg = ram_config.get()
+    assert cfg.val("ci.heures_actives") == [7, 23] and cfg.val("ci.fuseau") == "Europe/Paris"
+    assert cfg.val("composants.categories") == ["CPU", "GPU", "MOBO"]
+    assert cfg.val("arnaque.seuil_rejet") == 60 and cfg.val("arnaque.seuil_alerte") == 30
+    assert int(cfg.val("composants.requetes_par_source")) <= 8, "volume de requêtes borné"
 
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)

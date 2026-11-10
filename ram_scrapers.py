@@ -23,6 +23,7 @@ import random
 import re
 import time
 
+import arnaque
 import ram_config
 import ram_db
 import ram_parser
@@ -172,6 +173,25 @@ def traiter_annonce(brut, source, mot_cle=None, cfg=None, verif_vendeur=None):
         return {"annonce": annonce, "analyse": analyse, "pre": pre, "nouvelle": True,
                 "notifiable": False, "a_analyser": False}
 
+    # Risque d'arnaque (texte + prix très en dessous de la valeur de revente).
+    # AVANT la requête de profil vendeur : une arnaque évidente n'a pas à
+    # coûter une requête de plus.
+    risque = arnaque.evaluer(titre, description, prix, pre.get("revente_estimee"),
+                             nb_photos=len(photos), cfg=cfg)
+    if risque["rejeter"]:
+        motif = f"risque d'arnaque {risque['score']}/100 : " + ", ".join(risque["raisons"][:3])
+        maj_a = {"statut": "rejete", "statut_verif": "rejete",
+                 "exclusion": "arnaque", "rejet_motif": motif}
+        ram_db.maj_annonce(annonce_id, maj_a)
+        annonce.update(maj_a)
+        ram_db.journaliser("auto_rejet", annonce, motif=motif, decide_par="auto")
+        pre = dict(pre, exclusion="arnaque", rejet_motif=motif)
+        return {"annonce": annonce, "analyse": analyse, "pre": pre, "nouvelle": True,
+                "notifiable": False, "a_analyser": False}
+    mise_en_garde = arnaque.drapeau(risque)
+    if mise_en_garde:
+        pre["drapeaux"] = [mise_en_garde] + list(pre.get("drapeaux") or [])
+
     if verif_vendeur is not None:
         v = verif_vendeur(brut) or {}
         if not v.get("ok", True) and v.get("transitoire"):
@@ -312,10 +332,15 @@ class ScraperVinted(_AvecBascule):
         attendu = random.uniform(float(lo), float(hi))
         return (time.time() - self._dernier_passage.get(mot_cle, 0)) >= attendu
 
-    def scanner_mot_cle(self, mot_cle):
-        """Retourne la liste des résultats de traiter_annonce()."""
+    def rechercher(self, mot_cle):
+        """Recherche seule : liste d'annonces normalisées (dicts bruts).
+
+        None = pas de réponse exploitable (quarantaine, blocage, erreur — déjà
+        compté dans les stats et le disjoncteur) ; [] = recherche réussie sans
+        résultat. La distinction évite de compter un succès après un échec.
+        """
         if self.quarantaine.bloque(mot_cle):
-            return []
+            return None
         self._dernier_passage[mot_cle] = time.time()
         limite = int(self.cfg.val("sources.vinted.max_resultats_par_requete", 20))
 
@@ -329,7 +354,7 @@ class ScraperVinted(_AvecBascule):
             self.echecs_consecutifs += 1
             print(f"[vinted] « {mot_cle} » : toutes les sorties réseau sont à l'écart")
             ram_db.maj_scan_stat(self.source, mot_cle, erreurs=1)
-            return []
+            return None
         except VintedError as e:
             self.echecs_consecutifs += 1
             statut = getattr(e, "status", None)
@@ -341,26 +366,33 @@ class ScraperVinted(_AvecBascule):
             else:
                 print(f"[vinted] « {mot_cle} » : {e}")
                 ram_db.maj_scan_stat(self.source, mot_cle, requetes=1, erreurs=1)
-            return []
+            return None
         except Exception as e:
             self.echecs_consecutifs += 1
             print(f"[vinted] « {mot_cle} » erreur inattendue : {e}")
             ram_db.maj_scan_stat(self.source, mot_cle, requetes=1, erreurs=1)
-            return []
+            return None
 
         self.quarantaine.succes(mot_cle)
         self.echecs_consecutifs = 0
+        self._nb_bruts = len(items)
+        return [self._normaliser(item) for item in items[:limite]]
+
+    def scanner_mot_cle(self, mot_cle):
+        """Retourne la liste des résultats de traiter_annonce()."""
+        bruts = self.rechercher(mot_cle)
+        if bruts is None:
+            return []
         resultats = []
         nouveaux = 0
-        for item in items[:limite]:
-            brut = self._normaliser(item)
+        for brut in bruts:
             r = traiter_annonce(brut, self.source, mot_cle, self.cfg,
                                 verif_vendeur=self._verif_vendeur)
             if r:
                 resultats.append(r)
                 nouveaux += int(r["nouvelle"])
         ram_db.maj_scan_stat(self.source, mot_cle, requetes=1,
-                             resultats=len(items), nouveaux=nouveaux)
+                             resultats=self._nb_bruts, nouveaux=nouveaux)
         return resultats
 
     def _verif_vendeur(self, brut):
@@ -435,9 +467,11 @@ class ScraperLeboncoin(_AvecBascule):
         attendu = random.uniform(float(lo), float(hi))
         return (time.time() - self._dernier_passage.get(mot_cle, 0)) >= attendu
 
-    def scanner_mot_cle(self, mot_cle):
+    def rechercher(self, mot_cle):
+        """Recherche seule (voir ScraperVinted.rechercher) : annonces
+        normalisées et filtrées par département, None si pas de réponse."""
         if self.quarantaine.bloque(mot_cle):
-            return []
+            return None
         self._dernier_passage[mot_cle] = time.time()
         limite = int(self.cfg.val("sources.leboncoin.max_resultats_par_requete", 35))
 
@@ -453,7 +487,7 @@ class ScraperLeboncoin(_AvecBascule):
             self.echecs_consecutifs += 1
             print(f"[lbc] « {mot_cle} » : toutes les sorties réseau sont à l'écart")
             ram_db.maj_scan_stat(self.source, mot_cle, erreurs=1)
-            return []
+            return None
         except Exception as e:
             self.echecs_consecutifs += 1
             nom = type(e).__name__
@@ -464,14 +498,13 @@ class ScraperLeboncoin(_AvecBascule):
             else:
                 print(f"[lbc] « {mot_cle} » : {e}")
                 ram_db.maj_scan_stat(self.source, mot_cle, requetes=1, erreurs=1)
-            return []
+            return None
 
         self.quarantaine.succes(mot_cle)
         self.echecs_consecutifs = 0
         departements = [str(d) for d in
                         (self.cfg.val("sources.leboncoin.departements", []) or [])]
-        resultats = []
-        nouveaux = retenus = 0
+        bruts = []
         for ad in annonces:
             brut = self._normaliser(ad)
             # Filtre géographique : hors zone, le retrait en main propre — le
@@ -479,14 +512,24 @@ class ScraperLeboncoin(_AvecBascule):
             if departements and brut.get("departement") and \
                     brut["departement"] not in departements:
                 continue
-            retenus += 1
+            bruts.append(brut)
+        self._nb_bruts = len(bruts)
+        return bruts
+
+    def scanner_mot_cle(self, mot_cle):
+        bruts = self.rechercher(mot_cle)
+        if bruts is None:
+            return []
+        resultats = []
+        nouveaux = 0
+        for brut in bruts:
             r = traiter_annonce(brut, self.source, mot_cle, self.cfg,
                                 verif_vendeur=self._verif_vendeur)
             if r:
                 resultats.append(r)
                 nouveaux += int(r["nouvelle"])
         ram_db.maj_scan_stat(self.source, mot_cle, requetes=1,
-                             resultats=retenus, nouveaux=nouveaux)
+                             resultats=self._nb_bruts, nouveaux=nouveaux)
         return resultats
 
     def _verif_vendeur(self, brut):
