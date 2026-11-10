@@ -14,6 +14,11 @@ ci:
   budget_notifications_s: 240   # temps laissé à l'envoi Telegram après le scan
   calibrage_annonces: 30        # calibrage quotidien borné (pas de rafale)
   echec_si_bloque: false        # true = run rouge (e-mail GitHub) quand tout est bloqué
+  # Plage horaire (heure de Paris, fin exclue) : en dehors, le passage est
+  # ignoré. 7-23 = de 07:00 à 22:59. [0, 24] = 24 h/24. La variable GitHub
+  # SNIPER_HEURES (ex. « 9-18 ») prend le pas, sans commit.
+  heures_actives: [7, 23]
+  fuseau: Europe/Paris
 
 # ─────────────────────────── ALERTES SYSTÈME ───────────────────────────
 # Le bot prévient sur Telegram quand Vinted/Leboncoin le bloquent partout,
@@ -35,6 +40,47 @@ filtre_vendeur:
   #   rejeter : l'annonce n'est pas notifiée, et retentée au scan suivant
   #   garder  : l'annonce passe sans vérification
   si_inconnu: rejeter
+
+# ─────────────────────────── ARNAQUES ───────────────────────────
+# Score 0-100 (texte + prix par rapport au marché), commun à la RAM et aux
+# composants. ≥ seuil_rejet : l'annonce est écartée, jamais notifiée.
+# Entre seuil_alerte et seuil_rejet : notifiée avec un drapeau ⚠️ qui dit pourquoi.
+arnaque:
+  actif: true
+  seuil_rejet: 60
+  seuil_alerte: 30
+  prix_tres_bas_ratio: 0.40     # prix < 40 % du marché : +35 points
+  prix_suspect_ratio: 0.55      # prix < 55 % du marché : +15 points
+
+# ─────────────────────────── COMPOSANTS ───────────────────────────
+# Processeurs, cartes graphiques, cartes mères… : prix de market_db.py et
+# market_extra.py, corrigés par les prix réellement observés. `python
+# ram_sniper.py --prix-composants` montre l'écart grille / marché.
+composants:
+  actif: true
+  # CPU, GPU, MOBO = identification fiable (le modèle est dans le titre).
+  # STORAGE, PSU, COOLING, CASE… existent dans market_db.py mais ne se
+  # reconnaissent que par une capacité (« 850W », « 2To ») : beaucoup de
+  # faux positifs, donc désactivés par défaut.
+  categories: [CPU, GPU, MOBO]
+  # Recherches par source et par passage (en plus des mots-clés RAM). C'est LE
+  # réglage qui pèse sur le risque de blocage : 6 → ~36 requêtes/heure/source.
+  requetes_par_source: 6
+  prix_min_reference_eur: 25    # modèles à moins de 25 € : marge trop faible
+  marge_min_eur: 15
+  marge_min_pct: 12
+  port_supplementaire_eur: {GPU: 3.0, MOBO: 2.0}   # colis plus lourds que la RAM
+  # Prix observé : médiane des annonces vues, mélangée au prix de la grille.
+  fenetre_jours: 30
+  obs_min: 8                    # annonces nécessaires avant de corriger la grille
+  melange_observe: 0.5
+  melange_observe_estime: 0.7   # grille « estimée » (market_extra.py) : on s'en méfie plus
+  facteur_prix_demande: 0.93    # on demande plus qu'on n'obtient
+  ecart_max_pct: 35             # la correction ne dépasse jamais ±35 % de la grille
+  avis_confiance: 30            # sous 40 % du marché, il faut ≥ 30 avis, sinon c'est rejeté
+  max_notifs_par_passage: 6
+  validite_h: 6                 # une affaire non notifiée depuis 6 h est abandonnée
+  conservation_jours: 60
 
 # ─────────────────────────── SEUILS DE SCORING ───────────────────────────
 scoring:

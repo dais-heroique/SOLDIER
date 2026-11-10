@@ -39,6 +39,7 @@ import time
 from datetime import datetime
 
 import ram_calibration
+import ram_composants
 import ram_config
 import ram_db
 import ram_pairing
@@ -192,6 +193,25 @@ def worker_scraping(cfg, une_seule_fois=False, limite_mots=None):
                         mot_cle=mot, erreur=str(e))
                 ram_scrapers._pause(
                     cfg.val(f"sources.{scraper.source}.delai_entre_requetes_s", [2.5, 5.0]))
+
+            # Processeurs, cartes graphiques, cartes mères : même source, même
+            # sortie réseau, même disjoncteur. Une panne ici ne doit jamais
+            # empêcher le scan RAM ni la fin du passage.
+            if cfg.val("composants.actif", True) and not ARRET.is_set() and not (
+                    seuil_disj and scraper.echecs_consecutifs >= seuil_disj):
+                try:
+                    evals = ram_composants.scanner_source(
+                        scraper, cfg, arret=ARRET)
+                    STATS["annonces_vues"] += len(evals)
+                except Exception as e:
+                    STATS["erreurs"] += 1
+                    log("ERROR", "scan composants en échec", source=scraper.source,
+                        erreur=str(e))
+
+        try:
+            ram_composants.notifier(cfg)
+        except Exception as e:
+            log("WARN", "notifications composants en échec", erreur=str(e))
 
         # Bilan de fin de cycle. Sans lui, on ne voit défiler que « scan » et
         # rien ne dit si le seuil est presque atteint ou hors d'atteinte : on
@@ -614,6 +634,10 @@ def purger(cfg=None):
         """, (limite,))
         supprimees = curseur.rowcount
     log("INFO", "purge des annonces", supprimees=supprimees, plus_vieilles_que_j=jours)
+    try:
+        log("INFO", "purge des composants", supprimes=ram_composants.purger(cfg))
+    except Exception as e:
+        log("WARN", "purge des composants en échec", erreur=str(e))
     return supprimees
 
 
@@ -687,6 +711,62 @@ def _requetes_et_erreurs():
     return int(ligne["r"]), int(ligne["e"])
 
 
+# ─────────────────────── PLAGE HORAIRE ───────────────────────
+def plage_horaire(cfg=None):
+    """(début, fin) en heures entières, ou None = toujours actif.
+
+    SNIPER_HEURES (« 7-23 », variable GitHub du même nom) prend le pas sur
+    ci.heures_actives : on règle la plage depuis l'interface GitHub, sans
+    commit. « 0-24 » ou une valeur vide désactive la limite. Fin exclue :
+    « 7-23 » = de 07:00 à 22:59.
+    """
+    cfg = cfg or ram_config.get()
+    brut = os.environ.get("SNIPER_HEURES")
+    if brut is not None and brut.strip():
+        try:
+            debut, fin = (int(x) for x in brut.replace(" ", "").split("-"))
+        except ValueError:
+            log("WARN", "SNIPER_HEURES illisible, plage ignorée", valeur=brut)
+            return None
+    else:
+        valeur = cfg.val("ci.heures_actives", None)
+        if not valeur or len(valeur) != 2:
+            return None
+        debut, fin = int(valeur[0]), int(valeur[1])
+    if debut == fin or (debut <= 0 and fin >= 24):
+        return None
+    return debut, fin
+
+
+def dans_plage_horaire(cfg=None, maintenant=None):
+    """Vrai si le bot doit travailler à cette heure (fuseau ci.fuseau, Paris).
+
+    Le cron GitHub est en UTC : l'heure d'été ferait glisser une plage écrite
+    en UTC d'une heure deux fois par an. On convertit donc ici, et le cron du
+    workflow reste volontairement large. SNIPER_IGNORER_PLAGE=1 (lancement
+    manuel) force le passage.
+    """
+    cfg = cfg or ram_config.get()
+    if os.environ.get("SNIPER_IGNORER_PLAGE"):
+        return True
+    plage = plage_horaire(cfg)
+    if plage is None:
+        return True
+    debut, fin = plage
+    fuseau = str(cfg.val("ci.fuseau", "Europe/Paris"))
+    try:
+        from zoneinfo import ZoneInfo
+        heure = (maintenant or datetime.now(ZoneInfo(fuseau))).astimezone(ZoneInfo(fuseau)).hour
+    except Exception as e:
+        log("WARN", "fuseau horaire indisponible, heure locale utilisée",
+            fuseau=fuseau, erreur=str(e))
+        heure = (maintenant or datetime.now()).hour
+    if debut < fin:
+        return debut <= heure < fin
+    return heure >= debut or heure < fin        # plage qui passe minuit (22-6)
+
+
+
 def executer_ci(cfg=None):
     """Un passage complet pour un hébergement par cron (GitHub Actions) :
     scan de quelques mots-clés par source, envoi des notifications en attente,
@@ -700,6 +780,9 @@ def executer_ci(cfg=None):
     ci.echec_si_bloque est vrai.
     """
     cfg = cfg or ram_config.get()
+    if not dans_plage_horaire(cfg):
+        log("INFO", "hors plage horaire : passage ignoré", plage=plage_horaire(cfg))
+        return 0
     ram_db.init_db()
     os.environ["RAM_SANS_ELECTION"] = "1"     # une seule instance en ligne
 
@@ -851,16 +934,18 @@ OPTIONS = {
     "--calibrer": "lance le job de calibrage des prix",
     "--etat": "état complet du système, en JSON",
     "--seed": "recharge la base de références",
+    "--prix-composants": "prix de marché des composants : grille vs annonces observées",
     "--force": "démarre même si une autre instance tourne déjà",
     "--limite=N": "nombre d'annonces à traiter (--diag, --replay)",
     "--port=N": "port du dashboard",
+    "--categorie=X": "limite --prix-composants à une catégorie (CPU, GPU, MOBO…)",
 }
 
 
 def _valider_options(args, silencieux=False):
     inconnues = [a for a in args
                  if a not in OPTIONS
-                 and not a.startswith(("--limite=", "--port="))]
+                 and not a.startswith(("--limite=", "--port=", "--categorie="))]
     if not inconnues:
         return True
     if silencieux:
@@ -963,6 +1048,13 @@ def main():
 
     if "--seed" in args:
         ram_db.seed_references()
+        return
+
+    if "--prix-composants" in args:
+        ram_db.init_db()
+        categorie = next((a.split("=", 1)[1].upper() for a in args
+                          if a.startswith("--categorie=")), None)
+        ram_composants.afficher_rapport(cfg, categorie)
         return
 
     # Verrou d'instance : pris seulement pour une vraie exécution du bot.

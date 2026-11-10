@@ -777,6 +777,16 @@ passage à l'autre par le cache GitHub.
 4. Éteins le bot sur le Mac (`ram_service.py uninstall`) : deux instances
    doubleraient les requêtes et les notifications.
 
+### Plage horaire : 7h–23h, réglable sans commit
+
+Le bot ne travaille que de 07:00 à 22:59, **heure de Paris** (été comme hiver).
+Hors plage, le job `plage` du workflow répond « non » en quelques secondes et
+le job de scan n'est même pas démarré. Pour changer : *Settings → Secrets and
+variables → Actions → onglet **Variables** → New repository variable*
+`SNIPER_HEURES` = `9-18` (début inclus, fin exclue ; `0-24` = tout le temps).
+Un lancement manuel (*Run workflow*) ignore toujours la plage, pour tester à
+n'importe quelle heure. La plage réduit aussi le volume de requêtes d'un tiers.
+
 ### Ne pas rester bloqué : la chaîne de sorties réseau
 
 Vinted et Leboncoin (Datadome) bloquent **par adresse IP**, et une IP de
@@ -1036,3 +1046,51 @@ puis, dans le navigateur du téléphone, `http://<IP-du-Mac>:8010/ram`
 (l'IP se lit dans Réglages → Wi-Fi). Par défaut le dashboard n'écoute que sur
 `127.0.0.1` : c'est volontaire, il n'a aucune authentification et ne doit
 jamais être exposé au-delà de votre réseau local.
+
+## 11. Processeurs, cartes graphiques, cartes mères — et arnaques
+
+Le bot ne cherchait que de la DDR4. Il applique maintenant la même méthode aux
+autres composants dont SOLDIER connaît les prix (`market_db.py`, ~280 modèles
+une fois complété par `market_extra.py`).
+
+**Ce qui se passe à chaque passage** : en plus des mots-clés RAM, les
+`composants.requetes_par_source` (6) recherches les plus « en retard » partent
+sur chaque source (les modèles chers reviennent plus souvent). Pour chaque
+annonce :
+
+1. le **modèle exact** est lu dans le titre (`ram_composants.identifier`) :
+   « 5600X » ≠ « 5600 », « i5-9600K » n'est pas un « Ryzen 5 9600 », un titre
+   qui cite deux modèles (« 5600X + RTX 3060 ») est écarté ;
+2. les **PC complets, portables, boîtes vides, pièces HS, lots ambigus** sont
+   écartés ;
+3. le **prix de référence** est celui de la grille, corrigé par le prix médian
+   observé sur les annonces vues (dès 8 annonces, plafonné à ±35 %) :
+   `python ram_sniper.py --prix-composants [--categorie=CPU]` montre l'écart ;
+4. le **risque d'arnaque** (`arnaque.py`) est évalué ;
+5. si le prix **total** (port et protection compris) laisse ≥ 15 € **et** ≥ 12 %
+   de marge, le vendeur est vérifié (≥ 1 avis, comme pour la RAM) puis l'annonce
+   est envoyée sur Telegram (🟢 bonne affaire, 💎 affaire en or).
+
+**Arnaques** (RAM comprise — elle n'avait aucun contrôle) : score 0-100 mêlant
+le texte (urgence, WhatsApp/Telegram, acompte, virement, Lydia, crypto, e-mail
+ou numéro dans l'annonce, « je suis à l'étranger », code SMS demandé…) et le
+prix par rapport au marché. ≥ 60 : rejeté. Entre 30 et 60 : notifié avec un
+drapeau ⚠️ qui dit pourquoi. Un prix sous 40 % du marché n'est accepté que d'un
+vendeur à ≥ 30 avis.
+
+**À savoir**
+
+- Les prix de `market_extra.py` (Intel sans « K », « KF », AMD « GT/XT »…) sont
+  des **estimations** dérivées des modèles voisins, pas des relevés : seuils plus
+  stricts, notification marquée « référence estimée », correction par le marché
+  plus rapide. Ajoute ou corrige une ligne quand tu vois un prix réel.
+- La médiane observée se fie aux prix **demandés** (× 0,93). Elle suit le marché
+  mais ne le mesure pas parfaitement ; le plafond ±35 % évite toute dérive.
+- Volume de requêtes : c'est le réglage qui pèse sur le risque de blocage.
+  Baisse `composants.requetes_par_source` si Vinted ou Leboncoin recommencent à
+  bloquer. Stockage, alimentations, refroidissement, boîtiers existent dans
+  `market_db.py` mais ne se reconnaissent que par une capacité (« 850W ») :
+  trop de faux positifs, donc désactivés (`composants.categories`).
+- Les champs réels de Vinted/Leboncoin n'ont pas pu être testés depuis
+  l'environnement de développement (accès refusé) : surveille les premiers
+  passages (`Actions` → logs → lignes « composants »).

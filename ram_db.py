@@ -38,6 +38,31 @@ MIGRATIONS = [
      ["ALTER TABLE ram_notification ADD COLUMN supprime_le REAL"]),
     (3, "nombre d'avis du vendeur (filtre vendeur_avis)",
      ["ALTER TABLE ram_annonce ADD COLUMN vendeur_avis INTEGER"]),
+    (4, "annonces de composants (processeurs, cartes graphiques…) et prix observés",
+     ["""CREATE TABLE IF NOT EXISTS ram_composant (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            source         TEXT NOT NULL,
+            url            TEXT NOT NULL,
+            categorie      TEXT,
+            modele         TEXT,
+            titre          TEXT,
+            prix_affiche   REAL,
+            prix_total     REAL,
+            reference      REAL,
+            marge          REAL,
+            niveau         TEXT,
+            score_arnaque  INTEGER,
+            vendeur_avis   INTEGER,
+            statut         TEXT NOT NULL,
+            motif          TEXT,
+            vu_le          REAL NOT NULL,
+            notifie_le     REAL,
+            UNIQUE (url)
+        )""",
+      "CREATE INDEX IF NOT EXISTS idx_composant_modele "
+      "ON ram_composant (modele, statut, vu_le)",
+      "CREATE INDEX IF NOT EXISTS idx_composant_statut "
+      "ON ram_composant (statut, vu_le)"]),
 ]
 
 
