@@ -259,6 +259,18 @@ def _exclusion_titre(titre, r):
     return None
 
 
+def prix_max_perso(nom, cfg=None):
+    """Prix affiché maximum fixé à la main (composants.prix_max_perso), ou None."""
+    table = (cfg or ram_config.get()).val("composants.prix_max_perso", None) or {}
+    for cle, valeur in table.items():
+        if str(cle).strip().lower() == str(nom).strip().lower():
+            try:
+                return float(valeur)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def evaluer_annonce(brut, source, cfg=None, verif=None, modeles=None, refs=None):
     """Évalue UNE annonce brute. Retourne un dict
     {statut, modele, motif, ...} ou None si l'annonce est inexploitable
@@ -339,6 +351,11 @@ def evaluer_annonce(brut, source, cfg=None, verif=None, modeles=None, refs=None)
                     score_arnaque=risque["score"], detail_prix=detail)
     affaire = (total <= m.good * echelle and marge >= float(r["marge_min_eur"])
                and marge_pct >= float(r["marge_min_pct"]))
+    # Prix max fixé à la main pour ce modèle : il remplace la règle de marge
+    # (c'est le prix AFFICHÉ de l'annonce, frais et port non compris).
+    perso = prix_max_perso(m.nom, cfg)
+    if perso is not None:
+        affaire = prix <= perso
     if not affaire:
         return clore("vue", None, **{k: v for k, v in resultat.items()
                                      if k in ("prix_total", "reference", "marge",

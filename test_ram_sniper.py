@@ -2763,6 +2763,26 @@ def _():
     assert ram_db.get_annonce(annonce_id)["statut"] == "notifie"
     assert annonce_id not in ram_sniper._essais_notif
 
+
+@test("composants : prix max fixé à la main (3070 à 215 €, 3060 Ti à 210 €)")
+def _():
+    reel = ram_config.get()
+    for nom, attendu in (("RTX 3070", 215), ("rtx 3060 ti", 210), ("RTX 4060", 210), ("RX 6700 XT", 210)):
+        assert comp.prix_max_perso(nom, reel) == attendu, nom
+    assert comp.prix_max_perso("RTX 3080", reel) is None
+    cfg = ram_config.Config({"composants": {"categories": ["GPU"],
+                                            "prix_max_perso": {"RTX 3060 Ti": 210}}})
+    verif = lambda brut: {"ok": True, "avis": 40, "note": 4.9}
+    def ev(n, titre, prix):
+        return comp.evaluer_annonce({"id": n, "url": f"https://vinted.fr/perso/{n}", "titre": titre,
+                                     "prix": prix, "image": "https://x/g.jpg", "vendeur_id": 5,
+                                     "description": "Carte graphique en très bon état, facture"},
+                                    "vinted", cfg, verif=verif)["statut"]
+    assert ev(1, "MSI RTX 3060 Ti Gaming X", 210.0) == "a_notifier"
+    assert ev(2, "Asus RTX 3060 Ti Dual", 211.0) == "vue"
+    r3 = ev(3, "Gigabyte RTX 3070 Eagle", 260.0)
+    assert r3 == "vue", ("sans prix perso : règle de marge", r3)
+
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]

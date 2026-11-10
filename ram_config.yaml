@@ -80,6 +80,14 @@ composants:
   prix_min_reference_eur: 25    # modèles à moins de 25 € : marge trop faible
   marge_min_eur: 15
   marge_min_pct: 12
+  # Prix AFFICHÉ maximum fixé à la main, par modèle (nom exact de la grille).
+  # Remplace la règle de marge pour ce modèle : alerte dès que l'annonce est
+  # à ce prix ou moins, même si la marge calculée est faible.
+  prix_max_perso:
+    RTX 3070: 215
+    RTX 3060 Ti: 210
+    RTX 4060: 210
+    RX 6700 XT: 210
   port_supplementaire_eur: {GPU: 3.0, MOBO: 2.0}   # colis plus lourds que la RAM
   # Prix observé : médiane des annonces vues, mélangée au prix de la grille.
   fenetre_jours: 30
