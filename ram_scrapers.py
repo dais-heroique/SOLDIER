@@ -30,6 +30,7 @@ import ram_parser
 import ram_scoring
 import reseau
 import vendeur_avis
+import vinted_age
 
 try:
     from vinted_client import VintedClient, VintedError
@@ -376,7 +377,22 @@ class ScraperVinted(_AvecBascule):
         self.quarantaine.succes(mot_cle)
         self.echecs_consecutifs = 0
         self._nb_bruts = len(items)
-        return [self._normaliser(item) for item in items[:limite]]
+        # La page ne donne plus de date : on l'estime d'après l'identifiant
+        # (voir vinted_age.py). Jamais bloquant.
+        try:
+            vinted_age.observer([it.get("id") for it in items])
+        except Exception:
+            pass
+        bruts = []
+        for item in items[:limite]:
+            brut = self._normaliser(item)
+            if not brut.get("publie_le"):
+                try:
+                    brut["publie_le"] = vinted_age.estimer(item.get("id"))
+                except Exception:
+                    pass
+            bruts.append(brut)
+        return bruts
 
     def scanner_mot_cle(self, mot_cle, sur_resultat=None):
         """Retourne la liste des résultats de traiter_annonce().

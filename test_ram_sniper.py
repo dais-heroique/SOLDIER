@@ -2622,6 +2622,147 @@ def _():
     cfg = ram_config.get()
     assert cfg.val("sources.vinted.mots_cles_rapides") and cfg.val("sources.leboncoin.mots_cles_rapides")
 
+
+# ─── Revue « sniper » : cadences, âge estimé, reprises rapides ───
+@test("cadences : chaque recherche a la sienne, la plus en retard passe d'abord, la voie lente n'est jamais affamée")
+def _():
+    import ram_sniper
+    t = [0.0]
+    cfg = ram_config.Config({
+        "sources": {"vinted": {"mots_cles_rapides": {"ddr4": [10, 10], "barrette ram": [50, 50]},
+                               "composants_larges": {"rtx": [30, 30]}}},
+        "composants": {"actif": True, "requetes_par_source": 1}})
+    tournee = ram_sniper.Tournee(_ScraperFactice(), horloge=lambda: t[0])
+    vus = []
+    for _ in range(100):                      # 100 créneaux de 4 s = 400 s
+        vus.append(tournee.suivante(cfg))
+        t[0] += 4
+    n = lambda genre, mot: vus.count((genre, mot))
+    assert 28 <= n("ram", "ddr4") <= 40, n("ram", "ddr4")            # ~ toutes les 10-12 s
+    assert 6 <= n("ram", "barrette ram") <= 9 and 10 <= n("large", "rtx") <= 14, vus
+    lents = [v for v in vus if v not in (("ram", "ddr4"), ("ram", "barrette ram"), ("large", "rtx"))]
+    assert {m for g, m in lents if g == "ram"} == {"kit ddr4", "trident z", "hyperx"}, lents
+    # Voies fréquentes saturées (tout est toujours en retard) : 1 créneau sur 6 reste à la voie lente.
+    sature = ram_config.Config({"sources": {"vinted": {"mots_cles_rapides": {"ddr4": [0, 0]}}},
+                                "composants": {"actif": False}})
+    tournee = ram_sniper.Tournee(_ScraperFactice(), horloge=lambda: t[0])
+    serie = [tournee.suivante(sature) for _ in range(12)]
+    assert sum(1 for v in serie if v != ("ram", "ddr4")) == 2, serie
+    # La vraie config : ddr4 au plus toutes les 12 s sur Vinted, rtx et ryzen suivis sur les deux sites.
+    reel = ram_config.get()
+    assert dict((m, hi) for m, _, hi in ram_sniper.cadences_rapides(
+        ram_scrapers.ScraperVinted(reel), reel))["ddr4"] <= 12
+    for source in ("vinted", "leboncoin"):
+        larges = {m for m, _, _ in ram_sniper.cadences_larges(source, reel)}
+        assert {"rtx", "ryzen", "gtx", "radeon rx"} <= larges, (source, larges)
+
+
+@test("Vinted : âge estimé par l'identifiant (repères, interpolation, prudence)")
+def _():
+    import vinted_age
+    with _Env():
+        vinted_age.reinitialiser()
+        t0 = 1_000_000.0
+        assert vinted_age.estimer(5000, t0) is None, "aucun repère : on ne dit rien"
+        vinted_age.observer([900, 1000], t0)            # démarrage : base non datée
+        assert vinted_age.estimer(1000, t0) is None
+        vinted_age.observer([1000, 1100], t0 + 10)      # 1100 vient d'apparaître
+        vinted_age.observer([1100], t0 + 20)            # rien de neuf
+        vinted_age.observer([2100, "x", None], t0 + 1010)
+        assert vinted_age.estimer(2100, t0 + 1015) == t0 + 1010, "vue à l'instant"
+        assert abs(vinted_age.estimer(1600, t0 + 1015) - (t0 + 510)) < 1, "interpolée"
+        assert vinted_age.estimer(900, t0 + 1015) is None, "trop peu de recul pour extrapoler"
+        assert vinted_age.estimer(9999, t0 + 1015) is None and vinted_age.estimer("abc") is None
+        vinted_age.observer([4100], t0 + 3010)          # 50 min de recul : 1 id/s
+        vieux = vinted_age.estimer(100, t0 + 3015)
+        assert abs(vieux - (t0 + 10 - 1000)) < 5, vieux
+        # Redémarrage : les repères persistent, la première recherche n'est pas datée.
+        vinted_age.reinitialiser()
+        vinted_age.observer([4500], t0 + 9000)
+        assert vinted_age.estimer(4500, t0 + 9000) is None
+        assert abs(vinted_age.estimer(1600, t0 + 9000) - (t0 + 510)) < 1
+        vinted_age.reinitialiser()
+
+
+@test("Vinted : page servie sans annonces = blocage (on change de sortie), pas une erreur muette")
+def _():
+    import vinted_client
+
+    class _Rep:
+        def __init__(self, code, texte=""):
+            self.status_code, self.text, self.cookies = code, texte, {}
+        def json(self):
+            raise ValueError("pas du JSON")
+
+    def client(page):
+        vc = vinted_client.VintedClient.__new__(vinted_client.VintedClient)
+        vc.host, vc.domain, vc.currency, vc.verbose = "https://www.vinted.fr", "vinted.fr", "EUR", False
+        vc.items_api = vc.host + "/api/v2/catalog/items"
+        vc._cookie_ok = True
+        vc._ensure_session = lambda force=False: None
+
+        class _S:
+            def get(self, url, **kw):
+                return _Rep(200, page) if url.endswith("/catalog") else _Rep(404, "<title>La page n'existe pas</title>")
+        vc.session = _S()
+        return vc
+
+    orig = vinted_client.time.sleep
+    vinted_client.time.sleep = lambda *_: None
+    try:
+        for page, statut in (("<html>refonte</html>", 200),
+                             ("<html><script src='https://geo.captcha-delivery.com/c.js'></script></html>", 403)):
+            try:
+                client(page).search(search_text="ddr4", max_retries=1)
+                assert False, "doit lever"
+            except vinted_client.VintedError as e:
+                assert e.status == statut and ram_scrapers._bloque_vinted(e), (statut, e)
+    finally:
+        vinted_client.time.sleep = orig
+
+
+@test("notification : un envoi Telegram raté repart en quelques secondes, pas après 5 minutes")
+def _():
+    import ram_sniper
+    with ram_db.get_db() as conn:
+        conn.execute("UPDATE ram_annonce SET statut='archive' WHERE statut='nouveau'")
+    annonce_id, _n = ram_db.upsert_annonce({
+        "source": "vinted", "url": "https://vinted.fr/reprise/1", "titre": "DDR4 32Go reprise",
+        "prix_affiche": 40.0, "photos": [], "brut": {}})
+    ram_db.maj_annonce(annonce_id, {"pre_score": 90.0, "statut": "nouveau"})
+    appels, attentes = [], []
+    origs = (ram_telegram.notifier_etape1, ram_telegram.anti_spam_ok, ram_telegram.role_instance,
+             ram_sniper.ARRET.wait)
+
+    def envoi(annonce, pre, cfg=None, chat_id=None):
+        appels.append(annonce["id"])
+        if len(appels) < 3:
+            raise ram_telegram.TelegramError("HTTP 429 : Too Many Requests")
+        ram_sniper.ARRET.set()                 # 3e essai réussi : fin du test
+
+    def attendre(secondes=None):
+        attentes.append(secondes)
+        return ram_sniper.ARRET.is_set()
+
+    ram_telegram.notifier_etape1, ram_telegram.anti_spam_ok = envoi, (lambda cfg=None: True)
+    ram_telegram.role_instance = lambda cfg=None, force=False: ("principal", "test")
+    ram_sniper.ARRET.wait = attendre
+    ram_sniper.ARRET.clear()
+    with ram_sniper._verrou_notif:
+        ram_sniper._file_notif.clear()
+    ram_sniper._essais_notif.clear()
+    try:
+        ram_sniper._enfiler_notification({"annonce": {"id": annonce_id}, "pre": {"pre_score": 90.0}})
+        ram_sniper.worker_notification(ram_config.Config({}))
+    finally:
+        (ram_telegram.notifier_etape1, ram_telegram.anti_spam_ok, ram_telegram.role_instance,
+         ram_sniper.ARRET.wait) = origs
+        ram_sniper.ARRET.clear()
+    assert appels == [annonce_id] * 3, appels
+    assert attentes[:2] == [3, 6], attentes
+    assert ram_db.get_annonce(annonce_id)["statut"] == "notifie"
+    assert annonce_id not in ram_sniper._essais_notif
+
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]

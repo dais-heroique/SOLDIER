@@ -763,10 +763,16 @@ illimitées. Le workflow `.github/workflows/ram-sniper.yml` lance
 plage horaire, comme sur un ordinateur.
 
 - **Un fil par source** : Vinted et Leboncoin sont scannés en parallèle.
-- **Voie rapide** : les recherches larges (`mots_cles_rapides`, triées « plus
-  récent d'abord ») reviennent toutes les 12-40 s (`rapide_toutes_les_s`) ; les
-  autres mots-clés et les composants tournent dans les créneaux restants. Le
-  débit de requêtes (`delai_entre_requetes_s`) ne change pas.
+- **Cadences** (`mots_cles_rapides`, `composants_larges` dans
+  `ram_config.yaml`) : chaque recherche fréquente a la sienne, triée « plus
+  récent d'abord ». Sur Vinted : « ddr4 » toutes les ~10 s, « rtx » ~30 s,
+  « ryzen » ~1 min ; sur Leboncoin : ~25 s, ~1 min, ~2 min. Les autres
+  mots-clés et les recherches par modèle tournent dans les créneaux restants
+  (~5 min). La ligne de log « rythme » donne le débit réel toutes les 2 min.
+- **Vitesse contre blocage** : `delai_entre_requetes_s` est LE réglage. Plus
+  court = plus rapide, mais Datadome bloque plus vite.
+- **Âge des annonces Vinted** : la page ne donne plus de date ; elle est
+  estimée d'après l'identifiant de l'annonce (`vinted_age.py`).
 - **Notification immédiate** : chaque annonce part sur Telegram dès qu'elle
   est évaluée, sans attendre la fin du lot ni du cycle.
 - **Sessions et relais** : un job GitHub est limité à 6 h. La session s'arrête

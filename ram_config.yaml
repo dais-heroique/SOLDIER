@@ -278,13 +278,26 @@ sources:
     actif: true
     priorite: 1
     delai_par_mot_cle_s: [30, 45]     # étalé, jamais en rafale
-    # Voie rapide (mode continu) : ces recherches larges reviennent toutes
-    # les 12-20 s ; les autres mots-clés tournent dans les créneaux restants.
-    # Le débit total (delai_entre_requetes_s) ne change pas.
-    mots_cles_rapides: [ddr4, barrette ram]
-    rapide_toutes_les_s: [12, 20]
-    delai_entre_requetes_s: [2.5, 5.0]
-    max_resultats_par_requete: 20
+    # ── Mode continu : cadence de chaque recherche fréquente (secondes) ──
+    # À chaque créneau, le bot sert la recherche la plus en retard. Toutes
+    # sont triées « plus récent d'abord » : une annonce neuve est en tête.
+    # Les autres mots-clés tournent dans les créneaux restants (profondeur).
+    mots_cles_rapides:
+      ddr4: [8, 12]                   # LA recherche du sniper RAM
+      barrette ram: [40, 60]
+    composants_larges:                # le modèle exact est lu dans le titre
+      rtx: [25, 35]                   # 3060 Ti, 3070, 4070… toutes les RTX
+      ryzen: [50, 70]
+      gtx: [240, 360]
+      radeon rx: [240, 360]
+      carte graphique: [240, 360]
+      intel core: [240, 360]
+      processeur: [300, 420]
+      carte mere: [300, 420]
+    # LE réglage de vitesse ET de risque : pause entre deux requêtes. Plus
+    # court = plus rapide, mais Datadome bloque plus vite.
+    delai_entre_requetes_s: [2.0, 3.5]
+    max_resultats_par_requete: 40     # la page en donne 96 : profondeur gratuite
     backoff_429_s: [60, 120, 300, 600]
     disjoncteur_echecs: 4             # 4 échecs d'affilée → source coupée pour ce cycle
     mots_cles:
@@ -313,8 +326,17 @@ sources:
     actif: true
     priorite: 2
     delai_par_mot_cle_s: [60, 90]     # anti-bot plus agressif
-    mots_cles_rapides: [ddr4]         # voie rapide (voir vinted)
-    rapide_toutes_les_s: [25, 40]
+    mots_cles_rapides:                # cadences (voir vinted)
+      ddr4: [18, 26]
+    composants_larges:
+      rtx: [50, 70]
+      ryzen: [100, 140]
+      gtx: [400, 600]
+      radeon rx: [400, 600]
+      carte graphique: [400, 600]
+      intel core: [400, 600]
+      processeur: [500, 700]
+      carte mere: [500, 700]
     delai_entre_requetes_s: [5.0, 9.0]
     max_resultats_par_requete: 35
     backoff_429_s: [120, 300, 900, 1800]
