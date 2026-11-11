@@ -225,11 +225,14 @@ def traiter_annonce(brut, source, mot_cle=None, cfg=None, verif_vendeur=None):
     seuil_notif = float(cfg.val("scoring.seuil_notification", 65))
     seuil_vision = float(cfg.val("scoring.seuil_vision", 55))
     score = pre["pre_score"]
+    # DDR5 : l'analyse photo est calibrée pour la DDR4 (elle la jugerait
+    # « hors périmètre ») ; la règle de prix fixe suffit.
+    ddr5 = str(pre.get("regle_prix") or "").startswith("DDR5")
 
     return {
         "annonce": annonce, "analyse": analyse, "pre": pre, "nouvelle": True,
         "notifiable": score >= seuil_notif,
-        "a_analyser": score >= seuil_vision and bool(photos)
+        "a_analyser": score >= seuil_vision and bool(photos) and not ddr5
                       and bool(cfg.val("vision.actif", True)),
     }
 
