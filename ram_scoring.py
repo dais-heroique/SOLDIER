@@ -386,6 +386,29 @@ def pre_score(annonce, analyse, cfg=None):
         "details_revente": [], "notes": {},
     }
 
+    # DDR5 : hors du calcul (grille DDR4), mais prix max fixés à la main par
+    # capacité totale (ram_prix_max.ddr5). SO-DIMM, ECC et PC complets sont
+    # détectés avant la génération : ils restent exclus.
+    if analyse.get("exclusion") == "ddr5":
+        total = analyse.get("capacite_totale_go")
+        regles = (cfg.section("ram_prix_max") or {}).get("ddr5") or []
+        regle = next((r for r in regles
+                      if total and int(r.get("capacite_totale", 0)) == int(total)), None)
+        if regle is None:
+            resultat["rejet_motif"] = (f"DDR5 {total} Go : non recherchée" if total
+                                       else "DDR5 : capacité illisible")
+            return resultat
+        prix = float(annonce.get("prix_affiche") or 0)
+        plafond = float(regle["max"])
+        resultat["regle_prix"] = f"DDR5 {total} Go"
+        if prix > plafond:
+            resultat["exclusion"] = "prix_max"
+            resultat["rejet_motif"] = f"DDR5 {total} Go à {prix:.0f} € > {plafond:.0f} € (prix max fixé)"
+            return resultat
+        resultat.update(exclusion=None, rejet_motif=None, pre_score=80.0)
+        resultat.setdefault("drapeaux", []).append(f"DDR5 {total} Go ≤ {plafond:.0f} €")
+        return resultat
+
     # Exclusion de périmètre : score 0, pas de calcul, pas de notification.
     if analyse.get("exclusion"):
         resultat["rejet_motif"] = analyse.get("rejet_motif")

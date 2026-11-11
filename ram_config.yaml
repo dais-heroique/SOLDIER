@@ -182,6 +182,11 @@ ram_prix_max:
     - {config: 2x8, max: 50, frequence_min: 3000, sauf: [trident z royal]}
     - {config: 1x16, max: 40, frequence_min: 3000}
     - {config: 2x16, max: 100, frequence_min: 3000}
+  # DDR5 : prix max par capacité totale (2x16 ou 1x32 = 32 Go). Les autres
+  # capacités DDR5 ne sont pas recherchées.
+  ddr5:
+    - {capacite_totale: 32, max: 250}
+    - {capacite_totale: 16, max: 150}
 
 # ─────────────────────────── PÉRIMÈTRE ───────────────────────────
 perimetre:
@@ -312,6 +317,7 @@ sources:
     # Les autres mots-clés tournent dans les créneaux restants (profondeur).
     mots_cles_rapides:
       ddr4: [8, 12]                   # LA recherche du sniper RAM
+      ddr5: [25, 35]
       barrette ram: [40, 60]
     composants_larges:                # le modèle exact est lu dans le titre
       rtx: [25, 35]                   # 3060 Ti, 3070, 4070… toutes les RTX
@@ -334,6 +340,9 @@ sources:
       - ddr4 3000
       - ddr4 3200
       - ddr4 3600
+      - ddr5
+      - ddr5 32go
+      - ddr5 16go
       - ddr4 32go
       - ddr4 16go
       - ddr4 8go
@@ -357,6 +366,7 @@ sources:
     delai_par_mot_cle_s: [60, 90]     # anti-bot plus agressif
     mots_cles_rapides:                # cadences (voir vinted)
       ddr4: [18, 26]
+      ddr5: [50, 70]
     composants_larges:
       rtx: [50, 70]
       ryzen: [100, 140]
@@ -377,6 +387,9 @@ sources:
       - ddr4 3000
       - ddr4 3200
       - ddr4 16go
+      - ddr5
+      - ddr5 32go
+      - ddr5 16go
       - ddr4 32go
       - kit ddr4
       - ram pc gamer

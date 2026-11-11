@@ -2872,6 +2872,32 @@ def _():
     r = pre("Kingston 2x8Go DDR4 2666", 45)
     assert r.get("regle_prix") is None, "sous 3000 MHz : calcul normal"
 
+
+@test("DDR5 : 32 Go ≤ 250 €, 16 Go ≤ 150 €, le reste ignoré ; alerte complète et sans analyse photo")
+def _():
+    cfg = ram_config.get()
+    verif = lambda brut: {"ok": True, "avis": 12, "note": 4.8}
+    def traiter(n, titre, prix):
+        brut = {"id": 7000 + n, "url": f"https://www.vinted.fr/items/ddr5-{n}", "titre": titre,
+                "prix": float(prix), "description": "Kit en parfait état, testé, envoi soigné.",
+                "photos": ["https://x/1.jpg", "https://x/2.jpg"], "vendeur_id": 4}
+        return ram_scrapers.traiter_annonce(brut, "vinted", "ddr5", cfg, verif_vendeur=verif)
+    for n, titre, prix, ok in ((1, "Corsair Vengeance 32Go (2x16) DDR5 6000", 250, True),
+                               (2, "Kingston Fury Beast DDR5 32GB 5600", 251, False),
+                               (3, "Ram DDR5 16Go 4800 Crucial", 150, True),
+                               (4, "DDR5 2x8Go 5600", 160, False),
+                               (5, "Kit DDR5 64Go 2x32", 200, False),
+                               (6, "SO-DIMM DDR5 32Go portable", 100, False),
+                               (7, "Barrette DDR5", 50, False)):
+        r = traiter(n, titre, prix)
+        assert r["notifiable"] == ok, (titre, prix, r["pre"] and r["pre"].get("rejet_motif"))
+        if ok:
+            assert not r["a_analyser"], "pas d'analyse photo DDR4 sur de la DDR5"
+            texte = ram_telegram.message_etape1(r["annonce"], r["pre"], cfg)
+            assert "DDR5" in texte and str(prix) in texte, texte
+    r = traiter(8, "G.Skill Trident Z5 2x16Go DDR4 3600", 90)   # la DDR4 garde ses règles
+    assert r["notifiable"] and r["pre"].get("regle_prix") == "2x16", r["pre"]
+
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)
 total = RESULTATS["ok"] + RESULTATS["ko"]
