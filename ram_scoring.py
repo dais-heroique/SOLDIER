@@ -321,6 +321,57 @@ def marge_suffisante(marge_eur, marge_pct, cfg=None):
 
 
 # ─────────────────────── PRÉ-SCORE ───────────────────────
+# ─────────────────────── PRIX MAX FIXÉS À LA MAIN (RAM) ───────────────────────
+def _texte_normalise(texte):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(texte or "").lower())
+    return " ".join("".join(c for c in t if c.isalnum() or c.isspace()).split())
+
+
+def regle_prix_fixe(annonce, analyse, cfg=None):
+    """Règle de ram_prix_max qui s'applique à cette annonce, ou None.
+
+    Une règle vise une configuration (« 2x8 » = 2 barrettes de 8 Go) ou une
+    capacité totale, avec une fréquence minimale facultative, et des gammes
+    exclues (« trident z royal » garde le calcul normal). Une annonce dont la
+    configuration est illisible (« 16 Go DDR4 » sans 2x8 / 1x16) n'est visée
+    par aucune règle : elle garde le calcul normal."""
+    cfg = cfg or ram_config.get()
+    section = cfg.section("ram_prix_max") or {}
+    if not section.get("actif", True):
+        return None
+    nb = analyse.get("nb_modules")
+    cap = analyse.get("capacite_module_go")
+    total = analyse.get("capacite_totale_go") or ((nb or 0) * (cap or 0) or None)
+    freq = analyse.get("frequence_mhz")
+    texte = _texte_normalise(" ".join(str(x or "") for x in (
+        annonce.get("titre"), analyse.get("marque_detectee"), analyse.get("gamme_detectee"))))
+    for regle in section.get("regles") or []:
+        if "config" in regle:
+            try:
+                n, c = (int(x) for x in str(regle["config"]).lower().split("x"))
+            except ValueError:
+                continue
+            if nb != n or cap != c:
+                continue
+        elif "capacite_totale" in regle:
+            if total != int(regle["capacite_totale"]):
+                continue
+        else:
+            continue
+        fmin = regle.get("frequence_min")
+        if fmin and (not freq or int(freq) < int(fmin)):
+            continue
+        if any(_texte_normalise(g) in texte for g in (regle.get("sauf") or [])):
+            continue
+        return regle
+    return None
+
+
+def _nom_regle(regle):
+    return str(regle.get("config") or f"{regle.get('capacite_totale')} Go")
+
+
 def pre_score(annonce, analyse, cfg=None):
     """Étape 1 : texte seul. Retourne un dict complet, prêt à être écrit en
     base et à alimenter la notification instantanée."""
@@ -345,11 +396,30 @@ def pre_score(annonce, analyse, cfg=None):
         resultat["rejet_motif"] = "aucun signal DDR4 exploitable dans l'annonce"
         return resultat
 
+    regle = regle_prix_fixe(annonce, analyse, cfg)
+    if regle is not None:
+        resultat["regle_prix"] = _nom_regle(regle)
+        if regle.get("ignorer"):
+            resultat["exclusion"] = "hors_cible"
+            resultat["rejet_motif"] = f"{_nom_regle(regle)} : non recherché"
+            return resultat
+        prix = float(annonce.get("prix_affiche") or 0)
+        plafond = float(regle["max"])
+        if prix > plafond:
+            resultat["exclusion"] = "prix_max"
+            resultat["rejet_motif"] = (f"{_nom_regle(regle)} à {prix:.0f} € > "
+                                       f"{plafond:.0f} € (prix max fixé)")
+            return resultat
+
     ref = analyse.get("ref") or analyse.get("ref_approchee")
     if not ref:
         # Dernier filet : une capacité connue suffit à poser une valeur
         # plancher. Sans elle, l'annonce n'est vraiment pas exploitable.
         ref = _reference_plancher(analyse)
+    if not ref and regle is not None:
+        # Prix max fixé et respecté : alerte, même sans valeur de revente connue.
+        resultat["pre_score"] = 80.0
+        return resultat
     if not ref:
         resultat["exclusion"] = "non_identifie"
         resultat["rejet_motif"] = ("capacité illisible dans l'annonce : "
@@ -373,7 +443,7 @@ def pre_score(annonce, analyse, cfg=None):
     resultat.update({"revente_estimee": revente, "marge_estimee": marge,
                      "marge_pct": pct, "details_revente": details})
 
-    if not marge_suffisante(marge, pct, cfg):
+    if regle is None and not marge_suffisante(marge, pct, cfg):
         resultat["exclusion"] = "marge"
         resultat["rejet_motif"] = (
             f"marge {marge:.0f} € / {pct:.0f} % sous le plancher "
@@ -412,6 +482,9 @@ def pre_score(annonce, analyse, cfg=None):
 
     resultat["notes"] = {k: round(v, 1) for k, v in notes.items()}
     resultat["pre_score"] = round(clamp(score), 1)
+    if regle is not None:
+        # Sous le prix max fixé : c'est TA règle qui décide, l'alerte part.
+        resultat["pre_score"] = max(resultat["pre_score"], 80.0)
     return resultat
 
 

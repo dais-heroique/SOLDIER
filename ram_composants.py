@@ -84,7 +84,28 @@ DEFAUTS = {
         "mini pc", "bundle", "combo", "kit evolution", "kit upgrade",
         "playstation", "xbox", "ps5", "ps4", "console", "recherche", "cherche",
         "echange contre", "pour piece", "pour pieces", "hs",
+        # PC et kits qui citent un composant (« Setup 7800X3D », « Kit AM5 »)
+        "setup", "tour", "config", "configuration", "kit", "pack", "lot",
+        # Accessoires qui citent un modèle (« ventirad pour 7800X3D »)
+        "compatible", "ventirad", "ventilateur", "dissipateur", "refroidissement",
+        "watercooling", "water cooling", "aio", "pate thermique", "boite",
+        "carton", "sticker", "autocollant", "backplate", "waterblock", "riser",
+        "support gpu", "cable", "deshroud",
     ],
+    # Processeur ou carte mère avec de la RAM dans le titre = kit, pas la pièce seule.
+    "exclusions_titre_cpu_mobo": ["ddr4", "ddr5", "8go", "16go", "32go", "64go",
+                                  "8gb", "16gb", "32gb", "64gb"],
+    # Sous cette fraction du prix de référence, ce n'est pas le composant
+    # (accessoire, pièce détachée, prix « en description ») ou c'est une
+    # arnaque : rejeté quel que soit le vendeur.
+    "prix_plancher_ratio": 0.45,
+    # Prix observés retenus pour corriger la grille : entre ces fractions du
+    # prix de la grille (au-delà : PC complets, kits, annonces farfelues).
+    "observes_min_ratio": 0.5,
+    "observes_max_ratio": 1.4,
+    # Au plus N alertes par modèle sur la fenêtre (les meilleures d'abord).
+    "max_par_modele": 3,
+    "fenetre_par_modele_h": 6,
 }
 
 
@@ -238,7 +259,8 @@ def prix_reference(m, cfg=None, observes=None):
     aberrantes ne peuvent pas faire dériver toute la grille."""
     r = reglages(cfg)
     obs = prix_observes(m.nom, int(r["fenetre_jours"])) if observes is None else list(observes)
-    obs = [p for p in obs if 0.3 * m.fair <= p <= 2.5 * m.fair]    # annonces farfelues
+    lo, hi = float(r["observes_min_ratio"]), float(r["observes_max_ratio"])
+    obs = [p for p in obs if lo * m.fair <= p <= hi * m.fair]   # PC, kits, farfelues
     detail = {"statique": m.fair, "n": len(obs), "mediane": None, "estime": m.estime}
     if len(obs) < int(r["obs_min"]):
         return m.fair, detail
@@ -251,11 +273,29 @@ def prix_reference(m, cfg=None, observes=None):
 
 
 # ─────────────────────── ÉVALUATION D'UNE ANNONCE ───────────────────────
-def _exclusion_titre(titre, r):
+def _exclusion_titre(titre, r, categorie=None):
     jt = " ".join(jetons(titre))
-    for mot in r["exclusions_titre"]:
+    mots = list(r["exclusions_titre"])
+    if categorie in ("CPU", "MOBO"):
+        mots += list(r.get("exclusions_titre_cpu_mobo") or [])
+    for mot in mots:
         if re.search(r"\b" + re.escape(" ".join(jetons(mot))) + r"\b", jt):
             return mot
+    return None
+
+
+def prix_max_perso(nom, cfg=None, source=None):
+    """Prix affiché maximum fixé à la main (composants.prix_max_perso), ou None.
+    Valeur : un nombre (les deux sites) ou {vinted: …, leboncoin: …}."""
+    table = (cfg or ram_config.get()).val("composants.prix_max_perso", None) or {}
+    for cle, valeur in table.items():
+        if str(cle).strip().lower() == str(nom).strip().lower():
+            if isinstance(valeur, dict):
+                valeur = valeur.get(source)
+            try:
+                return float(valeur)
+            except (TypeError, ValueError):
+                return None
     return None
 
 
@@ -297,7 +337,7 @@ def evaluer_annonce(brut, source, cfg=None, verif=None, modeles=None, refs=None)
             _enregistrer(d)
         return d
 
-    mot = _exclusion_titre(titre, r)
+    mot = _exclusion_titre(titre, r, m.categorie)
     if mot:
         return clore("rejetee", f"titre : « {mot} » (PC complet, portable, lot…)")
     plancher = market_db.MIN_PRICE.get(m.categorie, 0)
@@ -317,6 +357,11 @@ def evaluer_annonce(brut, source, cfg=None, verif=None, modeles=None, refs=None)
                                    price=prix, fair=reference)
         if not a.get("keep") and a.get("reason_key") in ("accessory", "bad_condition"):
             return clore("rejetee", a.get("reason"))
+
+    plancher_ratio = float(r["prix_plancher_ratio"])
+    if reference and prix < plancher_ratio * reference:
+        return clore("rejetee", f"prix {prix:.0f} € à {prix / reference:.0%} de la référence "
+                                f"{reference:.0f} € : accessoire, pièce ou arnaque")
 
     risque = arnaque.evaluer(titre, description, prix, reference,
                              nb_photos=len(brut.get("photos") or []), cfg=cfg)
@@ -339,6 +384,11 @@ def evaluer_annonce(brut, source, cfg=None, verif=None, modeles=None, refs=None)
                     score_arnaque=risque["score"], detail_prix=detail)
     affaire = (total <= m.good * echelle and marge >= float(r["marge_min_eur"])
                and marge_pct >= float(r["marge_min_pct"]))
+    # Prix max fixé à la main pour ce modèle : il remplace la règle de marge
+    # (c'est le prix AFFICHÉ de l'annonce, frais et port non compris).
+    perso = prix_max_perso(m.nom, cfg, source)
+    if perso is not None:
+        affaire = prix <= perso
     if not affaire:
         return clore("vue", None, **{k: v for k, v in resultat.items()
                                      if k in ("prix_total", "reference", "marge",
@@ -521,9 +571,32 @@ def notifier(cfg=None):
         conn.execute("UPDATE ram_composant SET statut='expiree' "
                      "WHERE statut='a_notifier' AND vu_le<?",
                      (maintenant - float(r["validite_h"]) * 3600,))
-        lignes = [dict(x) for x in conn.execute(
-            "SELECT * FROM ram_composant WHERE statut='a_notifier' "
-            "ORDER BY marge DESC LIMIT ?", (int(r["max_notifs_par_passage"]),))]
+        candidates = [dict(x) for x in conn.execute(
+            "SELECT * FROM ram_composant WHERE statut='a_notifier' ORDER BY marge DESC")]
+        depuis = maintenant - float(r["fenetre_par_modele_h"]) * 3600
+        deja = {}
+        for x in conn.execute("SELECT modele, COUNT(*) FROM ram_composant "
+                              "WHERE statut='notifiee' AND notifie_le>=? GROUP BY modele",
+                              (depuis,)):
+            deja[x[0]] = x[1]
+        envoyees_titres = {(x[0], (x[1] or "").strip().lower(), x[2]) for x in conn.execute(
+            "SELECT modele, titre, prix_affiche FROM ram_composant "
+            "WHERE statut='notifiee' AND notifie_le>=?", (maintenant - 7 * 86400,))}
+        lignes, ecartees = [], []
+        for c in candidates:
+            cle = (c["modele"], (c["titre"] or "").strip().lower(), c["prix_affiche"])
+            if cle in envoyees_titres:
+                ecartees.append((c["id"], "même annonce déjà envoyée (republiée)"))
+            elif deja.get(c["modele"], 0) >= int(r["max_par_modele"]):
+                ecartees.append((c["id"], f"plafond {r['max_par_modele']} alertes / "
+                                          f"{r['fenetre_par_modele_h']} h pour ce modèle"))
+            elif len(lignes) < int(r["max_notifs_par_passage"]):
+                lignes.append(c)
+                deja[c["modele"]] = deja.get(c["modele"], 0) + 1
+                envoyees_titres.add(cle)
+        for ident, motif in ecartees:
+            conn.execute("UPDATE ram_composant SET statut='vue', motif=? WHERE id=?",
+                         (motif, ident))
     if not lignes:
         return 0
     estimes = {m.nom for m in catalogue(r["categories"]) if m.estime}
@@ -541,6 +614,35 @@ def notifier(cfg=None):
         if i < len(lignes) - 1:
             time.sleep(float(r["pause_notif_s"]))
     return envoyes
+
+
+# ─────────────────────── EXPORT DES ALERTES ───────────────────────
+def exporter_alertes(chemin, jours=2):
+    """Écrit en JSON les alertes envoyées ces `jours` derniers jours (RAM et
+    composants), avec titre, prix, référence, marge et lien : de quoi les
+    relire et régler les seuils. Retourne le nombre d'alertes."""
+    import json
+    depuis = time.time() - jours * 86400
+    sortie = {"genere_le": time.strftime("%Y-%m-%d %H:%M"), "composants": [], "ram": []}
+    with ram_db.get_db() as conn:
+        for x in conn.execute(
+                "SELECT source, categorie, modele, titre, prix_affiche, prix_total, reference, "
+                "marge, niveau, score_arnaque, vendeur_avis, motif, url, notifie_le "
+                "FROM ram_composant WHERE statut='notifiee' AND notifie_le>=? "
+                "ORDER BY notifie_le", (depuis,)):
+            sortie["composants"].append(dict(x))
+        try:
+            for x in conn.execute(
+                    "SELECT a.source, a.titre, a.prix_affiche, a.revente_estimee, a.marge_estimee, "
+                    "a.pre_score, a.vendeur_avis, a.capacite_totale_go, a.frequence_mhz, a.url, "
+                    "n.envoye_le FROM ram_notification n JOIN ram_annonce a ON a.id=n.annonce_id "
+                    "WHERE n.type='annonce' AND n.envoye_le>=? ORDER BY n.envoye_le", (depuis,)):
+                sortie["ram"].append(dict(x))
+        except Exception as e:
+            sortie["ram_erreur"] = str(e)
+    with open(chemin, "w", encoding="utf-8") as f:
+        json.dump(sortie, f, ensure_ascii=False, indent=1)
+    return len(sortie["composants"]) + len(sortie["ram"])
 
 
 # ─────────────────────── RAPPORT DE PRIX ───────────────────────

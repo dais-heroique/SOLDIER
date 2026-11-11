@@ -2096,10 +2096,12 @@ def _():
     cfg = ram_config.Config({"composants": {}})
     m = comp.Modele("CPU", "X 1000", 100, 83, 68, ["x 1000"])
     e = comp.Modele("CPU", "X 1000", 100, 80, 65, ["x 1000"], estime=True)
-    assert comp.prix_reference(m, cfg, observes=[150] * 5)[0] == 100, "moins de 8 annonces : grille"
-    assert abs(comp.prix_reference(m, cfg, observes=[150] * 20)[0] - 117.5) < 0.01, \
-        "150 × 0,93 plafonné à +35 % = 135, mélangé à 50 %"
-    assert abs(comp.prix_reference(e, cfg, observes=[150] * 20)[0] - 124.5) < 0.01, \
+    assert comp.prix_reference(m, cfg, observes=[135] * 5)[0] == 100, "moins de 8 annonces : grille"
+    assert abs(comp.prix_reference(m, cfg, observes=[135] * 20)[0] - 112.8) < 0.01, \
+        "135 × 0,93 = 125,55, mélangé à 50 %"
+    assert comp.prix_reference(m, cfg, observes=[600] * 20)[0] == 100, \
+        "PC complets et kits (> 1,4 × la grille) : ignorés"
+    assert abs(comp.prix_reference(e, cfg, observes=[135] * 20)[0] - 117.9) < 0.01, \
         "une estimation se corrige plus vite (70 %)"
     assert abs(comp.prix_reference(m, cfg, observes=[60] * 10)[0] - 82.5) < 0.01, \
         "le marché peut aussi baisser (plancher −35 %)"
@@ -2146,15 +2148,15 @@ def _():
     assert r["statut"] == "a_notifier"
 
 
-@test("composants : à 35 % du marché, un vendeur à 3 avis est rejeté, un vendeur à 45 avis est signalé ⚠️")
+@test("composants : sous 45 % de la référence, rejeté quel que soit le vendeur ; à 50 %, signalé ⚠️ si le vendeur a fait ses preuves")
 def _():
-    r = comp.evaluer_annonce(_brut_c(5, "Ryzen 5 5600X", 35), "vinted",
-                             verif=lambda b: {"ok": True, "avis": 3})
-    assert r["statut"] == "rejetee" and "trop beau" in r["motif"], r
-    r = comp.evaluer_annonce(_brut_c(6, "Ryzen 5 5600X", 35), "vinted",
+    for n, avis in ((5, 3), (6, 45)):
+        r = comp.evaluer_annonce(_brut_c(n, "Ryzen 5 5600X", 35), "vinted",
+                                 verif=lambda b, a=avis: {"ok": True, "avis": a})
+        assert r["statut"] == "rejetee" and "référence" in r["motif"], r
+    r = comp.evaluer_annonce(_brut_c(61, "Ryzen 5 5600X", 50), "vinted",
                              verif=lambda b: {"ok": True, "avis": 45})
     assert r["statut"] == "a_notifier" and r["niveau"] == "affaire", r
-    assert "arnaque" in r["motif"], "le doute doit être écrit dans la notification"
 
 
 @test("composants : boîte vide, HS, PC complet, portable, lot ambigu → pas de fausse alerte")
@@ -2299,7 +2301,7 @@ def _():
     cfg = ram_config.Config({
         "sources": {"vinted": {"actif": True, "mots_cles": ["ddr4"]},
                     "leboncoin": {"actif": False}},
-        "composants": {"categories": ["CPU"], "pause_notif_s": 0},
+        "composants": {"categories": ["CPU"], "pause_notif_s": 0, "max_par_modele": 99},
         "ci": {"budget_notifications_s": 1}, "vision": {"actif": False},
         "alertes": {"signe_de_vie_h": 0},
         "calibrage": {"actif": False, "heure_job": "99:99"}})
@@ -2478,7 +2480,7 @@ def _():
                        "larges_toutes_les_s": {"vinted": [100, 100]}}})
     tournee = ram_sniper.Tournee(_ScraperFactice(), horloge=lambda: t[0])
     vus = []
-    for _ in range(40):                       # 40 créneaux de 5 s = 200 s
+    for _ in range(44):                       # 44 créneaux de 5 s = 220 s
         vus.append(tournee.suivante(cfg))
         t[0] += 5
     larges = [m for g, m in vus if g == "large"]
@@ -2560,6 +2562,8 @@ def _():
 @test("--continu de bout en bout : affaire notifiée, relais demandé à la durée, rien hors plage")
 def _():
     import ram_sniper
+    with ram_db.get_db() as conn:          # le test --ci a déjà envoyé la même annonce
+        conn.execute("UPDATE ram_composant SET notifie_le=0 WHERE statut='notifiee'")
     vendeur_avis.vider_cache()
     orig, orig_get, orig_pause = ram_scrapers.VintedClient, ram_config.get, ram_scrapers._pause
     orig_req, orig_pause_v = comp.requetes_du_passage, vendeur_avis.PAUSE_S
@@ -2578,7 +2582,8 @@ def _():
         "sources": {"vinted": {"actif": True, "mots_cles": ["ddr4"],
                                "delai_entre_requetes_s": [0.05, 0.05]},
                     "leboncoin": {"actif": False}},
-        "composants": {"categories": ["CPU"], "pause_notif_s": 0, "requetes_par_source": 1},
+        "composants": {"categories": ["CPU"], "pause_notif_s": 0, "requetes_par_source": 1,
+                       "max_par_modele": 99},
         "ci": {"budget_notifications_s": 4}, "vision": {"actif": False},
         "alertes": {"signe_de_vie_h": 0},
         "calibrage": {"actif": False, "heure_job": "99:99"}})
@@ -2762,6 +2767,110 @@ def _():
     assert attentes[:2] == [3, 6], attentes
     assert ram_db.get_annonce(annonce_id)["statut"] == "notifie"
     assert annonce_id not in ram_sniper._essais_notif
+
+
+@test("composants : prix max fixé à la main (3070 à 215 €, 3060 Ti à 210 €)")
+def _():
+    reel = ram_config.get()
+    for nom, attendu in (("RTX 3070", 215), ("rtx 3060 ti", 210), ("RTX 4060", 210), ("RX 6700 XT", 210)):
+        assert comp.prix_max_perso(nom, reel) == attendu, nom
+    assert comp.prix_max_perso("RTX 3080", reel) is None
+    for nom in ("Ryzen 5 5600X", "i5-12400F", "i7-10700K"):
+        assert comp.prix_max_perso(nom, reel, "vinted") == comp.prix_max_perso(nom, reel, "leboncoin") == 85
+    assert comp.prix_max_perso("Ryzen 5 3600", reel, "vinted") == 45
+    assert comp.prix_max_perso("Ryzen 5 3600", reel, "leboncoin") == 44
+    assert comp.prix_max_perso("Ryzen 5 3600", reel) is None and comp.prix_max_perso("Ryzen 5 5600", reel) is None
+    cfg = ram_config.Config({"composants": {"categories": ["GPU"],
+                                            "prix_max_perso": {"RTX 3060 Ti": 210}}})
+    verif = lambda brut: {"ok": True, "avis": 40, "note": 4.9}
+    def ev(n, titre, prix):
+        return comp.evaluer_annonce({"id": n, "url": f"https://vinted.fr/perso/{n}", "titre": titre,
+                                     "prix": prix, "image": "https://x/g.jpg", "vendeur_id": 5,
+                                     "description": "Carte graphique en très bon état, facture"},
+                                    "vinted", cfg, verif=verif)["statut"]
+    assert ev(1, "MSI RTX 3060 Ti Gaming X", 210.0) == "a_notifier"
+    assert ev(2, "Asus RTX 3060 Ti Dual", 211.0) == "vue"
+    r3 = ev(3, "Gigabyte RTX 3070 Eagle", 260.0)
+    assert r3 == "vue", ("sans prix perso : règle de marge", r3)
+
+
+# ─── Moins de bruit : 7800X3D & co ───
+@test("bruit : accessoires, PC, kits qui citent un 7800X3D → aucune alerte")
+def _():
+    verif = lambda b: {"ok": True, "avis": 60, "note": 4.9}
+    for n, titre, prix in ((901, "Ventirad pour 7800X3D", 25), (902, "Ventilateur ryzen 7 7800x3d", 15),
+                           (903, "Pâte thermique 7800X3D", 12), (904, "Setup gamer 7800X3D 4070 Ti", 900),
+                           (905, "Tour 7800X3D 32go", 800), (906, "Config 7800X3D", 700),
+                           (907, "Kit AM5 Ryzen 7 7800X3D", 450), (908, "Ryzen 7 7800X3D DDR5 32Go", 400),
+                           (909, "Dissipateur Noctua compatible 7800X3D", 45),
+                           (910, "Ryzen 7 7800X3D", 120), (911, "AIO 360 pour Ryzen 7 7800X3D", 70)):
+        r = comp.evaluer_annonce(_brut_c(n, titre, prix), "vinted", verif=verif)
+        assert r is None or r["statut"] == "rejetee", (titre, r)
+    r = comp.evaluer_annonce(_brut_c(912, "Ryzen 7 7800X3D", 240), "vinted", verif=verif)
+    assert r["statut"] == "a_notifier", r
+    r = comp.evaluer_annonce(_brut_c(913, "RTX 3070 Gaming OC 8Go", 200), "vinted", verif=verif)
+    assert r["statut"] == "a_notifier", ("8Go ne bloque que CPU / carte mère", r)
+
+
+@test("bruit : 3 alertes max par modèle sur 6 h, et une annonce republiée n'est pas renvoyée")
+def _():
+    envoyes = []
+    orig = ram_telegram.envoyer_texte
+    ram_telegram.envoyer_texte = lambda texte, cfg=None: envoyes.append(texte)
+    cfg = ram_config.Config({"composants": {"categories": ["CPU"], "pause_notif_s": 0}})
+    try:
+        with ram_db.get_db() as conn:
+            conn.execute("UPDATE ram_composant SET statut='expiree' WHERE statut='a_notifier'")
+            conn.execute("UPDATE ram_composant SET notifie_le=0 WHERE statut='notifiee'")
+        verif = lambda b: {"ok": True, "avis": 60}
+        for n in range(920, 925):
+            comp.evaluer_annonce(_brut_c(n, "Ryzen 7 5800X3D", 150 + n - 920), "vinted", cfg, verif=verif)
+        assert comp.notifier(cfg) == 3, envoyes
+        comp.evaluer_annonce(_brut_c(930, "Ryzen 7 5800X3D", 150), "leboncoin", cfg, verif=verif)
+        assert comp.notifier(cfg) == 0, "plafond atteint ; et même titre/prix déjà envoyé"
+        assert comp._ligne("https://vinted.fr/composant/923")["statut"] == "vue"
+        assert "republiée" in comp._ligne("https://vinted.fr/composant/930")["motif"]
+        chemin = os.path.join(_TMP, "alertes.json")
+        assert comp.exporter_alertes(chemin) >= 3
+        import json as _j
+        donnees = _j.load(open(chemin, encoding="utf-8"))
+        assert any(a["modele"] == "Ryzen 7 5800X3D" for a in donnees["composants"]), donnees
+        assert "ram" in donnees and "ram_erreur" not in donnees, donnees.get("ram_erreur")
+    finally:
+        ram_telegram.envoyer_texte = orig
+
+
+@test("RAM : prix max fixés (2x8 ≤ 50 € sauf Trident Z Royal, 1x16 ≤ 40 €, 2x16 ≤ 100 €, 64 Go ignoré)")
+def _():
+    cfg = ram_config.get()
+    def pre(titre, prix):
+        a = ram_parser.analyser(titre, "Fonctionne parfaitement, testé.", 3, cfg)
+        _, _, total = ram_scoring.frais_acquisition("vinted", float(prix), cfg=cfg)
+        ann = {"titre": titre, "prix_affiche": float(prix), "prix_total": total,
+               "source": "vinted", "photos": ["a", "b", "c"], "vendeur_avis": 20}
+        for k in ("ref_id", "tier", "capacite_totale_go", "frequence_mhz", "nb_modules",
+                  "capacite_module_go"):
+            ann[k] = a.get(k)
+        return ram_scoring.pre_score(ann, a, cfg)
+    seuil = float(cfg.val("scoring.seuil_notification", 55))
+    for titre, prix, ok in (("Corsair Vengeance LPX 16Go (2x8Go) DDR4 3200", 50, True),
+                            ("Corsair Vengeance LPX 16Go (2x8Go) DDR4 3200", 51, False),
+                            ("Kingston Fury 2x8Go DDR4 3000MHz", 45, True),
+                            ("G.Skill Trident Z RGB 2x8Go DDR4 3200", 50, True),
+                            ("Crucial 1x16Go DDR4 3200", 40, True),
+                            ("Crucial 1x16Go DDR4 3200", 41, False),
+                            ("Corsair Vengeance 32Go (2x16) DDR4 3600", 100, True),
+                            ("Corsair Vengeance 32Go (2x16) DDR4 3600", 105, False),
+                            ("Kit 64Go (2x32) DDR4 3200 Corsair", 60, False)):
+        r = pre(titre, prix)
+        assert (not r["exclusion"] and r["pre_score"] >= seuil) == ok, (titre, prix, r["exclusion"],
+                                                                         r["rejet_motif"])
+    r = pre("Kit 64Go (2x32) DDR4 3200 Corsair", 60)
+    assert r["exclusion"] == "hors_cible", r
+    r = pre("G.Skill Trident Z Royal 2x8Go DDR4 3600", 50)
+    assert r.get("regle_prix") is None, "Trident Z Royal : calcul normal, pas le plafond 50 €"
+    r = pre("Kingston 2x8Go DDR4 2666", 45)
+    assert r.get("regle_prix") is None, "sous 3000 MHz : calcul normal"
 
 # ═══════════════════════════════════════════════════════════
 print("\n" + "═" * 60)

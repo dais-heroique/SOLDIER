@@ -80,6 +80,19 @@ composants:
   prix_min_reference_eur: 25    # modèles à moins de 25 € : marge trop faible
   marge_min_eur: 15
   marge_min_pct: 12
+  # Prix AFFICHÉ maximum fixé à la main, par modèle (nom exact de la grille).
+  # Un nombre = les deux sites.
+  # Remplace la règle de marge pour ce modèle : alerte dès que l'annonce est
+  # à ce prix ou moins, même si la marge calculée est faible.
+  prix_max_perso:
+    RTX 3070: 215
+    RTX 3060 Ti: 210
+    RTX 4060: 210
+    RX 6700 XT: 210
+    Ryzen 5 5600X: 85
+    i5-12400F: 85
+    i7-10700K: 85
+    Ryzen 5 3600: {vinted: 45, leboncoin: 44}   # un prix par site, si besoin
   port_supplementaire_eur: {GPU: 3.0, MOBO: 2.0}   # colis plus lourds que la RAM
   # Prix observé : médiane des annonces vues, mélangée au prix de la grille.
   fenetre_jours: 30
@@ -154,6 +167,21 @@ frais:
     vinted_commission_pct: 0.0  # côté vendeur Vinted : 0 (c'est l'acheteur qui paie)
     leboncoin_commission_pct: 0.0
     emballage_eur: 1.20         # bulle + carton, par expédition
+
+# ─────────────────────────── PRIX MAX RAM (fixés à la main) ───────────────────────────
+# Remplacent le calcul de marge pour les configurations listées : alerte dès
+# que le prix AFFICHÉ (frais et port non compris) est au plafond ou en dessous.
+# Les contrôles vendeur (≥ 1 avis), arnaque, DDR3, portable… restent appliqués.
+# Une annonce dont la configuration est illisible (« 16 Go DDR4 » sans « 2x8 »)
+# ou non listée (1x32, 4x8, 1x8…) garde le calcul normal.
+# Ordre : la première règle qui correspond s'applique.
+ram_prix_max:
+  actif: true
+  regles:
+    - {capacite_totale: 64, ignorer: true}                     # 64 Go : pas recherché
+    - {config: 2x8, max: 50, frequence_min: 3000, sauf: [trident z royal]}
+    - {config: 1x16, max: 40, frequence_min: 3000}
+    - {config: 2x16, max: 100, frequence_min: 3000}
 
 # ─────────────────────────── PÉRIMÈTRE ───────────────────────────
 perimetre:
@@ -303,6 +331,7 @@ sources:
     mots_cles:
       - ddr4
       - ddr 4
+      - ddr4 3000
       - ddr4 3200
       - ddr4 3600
       - ddr4 32go
@@ -345,6 +374,7 @@ sources:
     departements: ["74", "73", "01", "69"]   # Haute-Savoie, Savoie, Ain, Rhône
     mots_cles:
       - ddr4
+      - ddr4 3000
       - ddr4 3200
       - ddr4 16go
       - ddr4 32go

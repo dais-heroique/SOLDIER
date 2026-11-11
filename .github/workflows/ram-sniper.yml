@@ -173,6 +173,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow enable ram-sniper.yml --repo "${{ github.repository }}" || true
 
+      # Les alertes envoyées (2 derniers jours), pour les relire et régler les
+      # seuils : Actions → le run → « alertes-envoyees ».
+      - name: Exporter les alertes envoyées
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alertes-envoyees
+          path: alertes-envoyees.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       # Relais : la session s'est arrêtée à sa durée maximale, en pleine plage
       # horaire → on lance la suivante tout de suite (elle reprend la base
       # sauvegardée juste au-dessus). Si ce relais échoue, le chien de garde
